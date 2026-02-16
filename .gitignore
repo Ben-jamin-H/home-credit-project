@@ -1,0 +1,149 @@
+# ===================================================================
+# Home Credit Default Risk - .gitignore
+# ===================================================================
+# This file excludes data files, model objects, and large intermediate
+# files from version control. Only code and documentation are committed.
+# ===================================================================
+
+# -------------------------------------------------------------------
+# DATA FILES - Do not commit raw or processed data
+# -------------------------------------------------------------------
+
+# Raw CSV data files (large, ~2.7 GB total)
+*.csv
+
+# Parquet files (processed data)
+*.parquet
+*.pq
+
+# HDF5 / Feather / other data formats
+*.h5
+*.hdf5
+*.feather
+*.arrow
+
+# Data directories
+home-credit-default-risk/
+data/
+raw_data/
+processed_data/
+
+# -------------------------------------------------------------------
+# MODEL OBJECTS - Do not commit trained models
+# -------------------------------------------------------------------
+
+# Pickle files (models, fitted objects)
+*.pkl
+*.pickle
+
+# Joblib files
+*.joblib
+
+# scikit-learn / XGBoost / LightGBM models
+*.model
+*.bin
+*.xgb
+*.lgb
+*.cbm
+
+# ONNX models
+*.onnx
+
+# PyTorch / TensorFlow
+*.pt
+*.pth
+*.h5
+*.pb
+saved_model/
+checkpoints/
+
+# Model directories
+models/
+trained_models/
+saved_models/
+
+# -------------------------------------------------------------------
+# LARGE INTERMEDIATE FILES
+# -------------------------------------------------------------------
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.so
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# -------------------------------------------------------------------
+# IDE AND EDITOR FILES
+# -------------------------------------------------------------------
+
+# VS Code / Positron
+.vscode/
+.positai/
+*.code-workspace
+
+# PyCharm
+.idea/
+
+# Jupyter
+.jupyter/
+
+# -------------------------------------------------------------------
+# OS FILES
+# -------------------------------------------------------------------
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+~$*
+
+# -------------------------------------------------------------------
+# LOGS AND TEMPORARY FILES
+# -------------------------------------------------------------------
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
+# -------------------------------------------------------------------
+# REPORTS AND OUTPUTS (optional - uncomment if you want to exclude)
+# -------------------------------------------------------------------
+
+# Rendered HTML reports (large, can be regenerated)
+# *.html
+
+# PDF reports
+# *.pdf
+
+# -------------------------------------------------------------------
+# EXCEPTIONS - Files to INCLUDE despite above rules
+# -------------------------------------------------------------------
+
+# Keep the data dictionary (small, useful reference)
+!HomeCredit_columns_description.csv
+
+# Keep sample submission format (small, useful reference)  
+!sample_submission.csv
