@@ -1,7 +1,5 @@
 # Home Credit Default Risk
 
-A machine learning project to predict loan default risk for Home Credit Group, focusing on applicants with insufficient or non-existent credit histories.
-
 **Author:** Benjamin Hogan  
 
 ---
@@ -9,6 +7,8 @@ A machine learning project to predict loan default risk for Home Credit Group, f
 ## Project Overview
 
 Home Credit Group believes they are not strong enough at predicting the repayment ability of applicants who have insufficient or non-existent credit histories. This problem is inefficient and is missing realized potential in both application and current customer performance, which is costly to both parties.
+
+The purpose of the proposed project is to prevent future inefficiencies and lost revenue by identifying customers with insufficient credit history who have a high probability of repaying their loan. Those customers will not be rejected in the initial application process once identified. The model will further analyze the applicants in order to give them the most mutually beneficial loan terms. The benefit to Home Credit Group of a successful project will be improved revenue through more qualified customers and more consistent payments which would increase revenue and efficiency.
 
 - **Problem Type:** Binary classification (imbalanced — ~8% default rate)
 - **Target Variable:** `TARGET` (1 = default, 0 = repaid on time)
@@ -172,8 +172,3 @@ All data files are in `home-credit-default-risk/` and are **not committed to the
 | credit_card_balance.csv | Credit card balances |
 | HomeCredit_columns_description.csv | Data dictionary |
 
----
-
-## License
-
-This project is for educational purposes as part of the IS 6850 Capstone course.
