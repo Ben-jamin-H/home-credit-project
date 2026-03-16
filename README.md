@@ -32,6 +32,29 @@ A full end-to-end modeling workflow covering baselines, candidate model comparis
 
 ---
 
+## Model Card
+
+### `model_card.qmd`
+
+A structured model card documenting the final LightGBM classifier across nine sections. Written as a professional document — code is hidden and outputs are displayed — intended to be readable by both technical and non-technical stakeholders. Rendered HTML is generated locally from the `.qmd` source file.
+
+### What the Model Card Covers
+
+| Section | Summary |
+|---|---|
+| **1. Model Details** | LightGBM gradient-boosted classifier, version 1.0 (March 2026); 160 features; tuned hyperparameters |
+| **2. Intended Use** | First-pass credit screening for Home Credit underwriters; not designed for fraud detection, portfolio stress testing, or fully automated decisions |
+| **3. Performance Metrics** | CV AUC-ROC: 0.759 · Kaggle AUC-ROC: 0.747 · Precision: 0.241 · Recall: 0.412 · Approval rate: 86.2% (at threshold 0.63) |
+| **4. Decision Threshold Analysis** | Cost assumptions sourced from McKinsey (2020) and Moody's (2019): ~$934 profit per repaid loan, ~$10,500 loss per default (11.2× ratio). Optimal threshold of 0.63 maximizes expected net value at ~$50.5M — a $47.3M improvement over approving all applicants |
+| **5. Explainability** | SHAP analysis on a 1,000-row sample. Top predictors: `EXT_SOURCE_MEAN`, `EXT_SOURCE_2x3` (interaction), `LOAN_TO_VALUE_RATIO`, `INST_LATE_RATIO`, `NAME_EDUCATION_TYPE` |
+| **6. Adverse Action Mapping** | Top SHAP features translated into ECOA-compliant plain-language denial reasons (e.g., "limited external credit history", "pattern of late installment payments") |
+| **7. Fairness Analysis** | Female applicants approved at 88.4% vs 81.9% for male — gap is consistent with a 3.1pp difference in actual default rates. Education approval gap (91.9% for higher education vs 81.7% for lower secondary) exceeds the underlying default rate gap, flagged for disparate impact monitoring |
+| **8. Limitations & Risks** | Missing EXT_SOURCE scores for new borrowers; static training snapshot; uncalibrated probabilities; feedback loop risk; regulatory risk from gender and education as direct model inputs |
+| **9. Executive Summary** | Business recommendation: deploy as a tiered screening tool (auto-approve below 0.50, human review 0.50–0.75, auto-deny above 0.75). Key caveats: model misses 59% of defaults; financial estimates use industry benchmarks not internal figures; gender use requires legal review |
+
+
+---
+
 ## Modeling Workflow & Results
 
 ### Stage 1 — Baselines
