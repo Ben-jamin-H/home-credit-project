@@ -147,3 +147,15 @@ logs/
 
 # Keep sample submission format (small, useful reference)  
 !sample_submission.csv
+
+# -------------------------------------------------------------------
+# SUBMISSION FILES - Save locally only
+# -------------------------------------------------------------------
+submission.csv
+submission_*.csv
+
+# -------------------------------------------------------------------
+# RENDERED HTML REPORTS - Commit notebook HTML, ignore others
+# -------------------------------------------------------------------
+# Uncomment below to exclude all HTML; for now we include notebook HTML
+# *.html
