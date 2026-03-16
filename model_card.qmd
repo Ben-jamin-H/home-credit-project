@@ -1,0 +1,1088 @@
+---
+title: "Model Card: Home Credit Default Risk Classifier"
+author: "Benjamin Hogan"
+date: "March 2026"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    theme: cosmo
+    self-contained: true
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+  echo: false
+---
+
+```{python}
+#| label: setup
+#| include: false
+
+import sys
+import warnings
+import numpy as np
+import polars as pl
+import polars.selectors as cs
+import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import io, base64
+from pathlib import Path
+from IPython.display import HTML
+
+warnings.filterwarnings("ignore")
+
+DATA_DIR = Path(r"C:\Users\benjo\Documents\Grad School\IS 6850 Capstone\home-credit-default-risk")
+PREP_DIR = Path(r"C:\Users\benjo\Documents\Grad School\IS 6850 Capstone\home-credit-project")
+sys.path.insert(0, str(PREP_DIR))
+
+from data_preparation import (
+    prepare_application_data,
+    fit_params_from_train,
+    aggregate_bureau,
+    aggregate_previous_application,
+    aggregate_installments,
+    join_supplementary_features,
+)
+from sklearn.model_selection import StratifiedKFold, cross_val_predict
+from sklearn.metrics import (
+    roc_auc_score, roc_curve,
+    precision_score, recall_score, confusion_matrix,
+)
+import lightgbm as lgb
+import shap
+
+RANDOM_STATE = 42
+TARGET_COL   = "TARGET"
+
+def fig_to_b64(fig):
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight")
+    buf.seek(0)
+    b64 = base64.b64encode(buf.read()).decode()
+    plt.close(fig)
+    return b64
+
+def img(b64, alt="", width="100%"):
+    return HTML(f'<img src="data:image/png;base64,{b64}" alt="{alt}" style="width:{width};border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.12);margin:1em 0"/>')
+```
+
+```{python}
+#| label: load-data
+#| include: false
+
+train_raw  = pl.read_csv(DATA_DIR / "application_train.csv")
+params     = fit_params_from_train(train_raw)
+train_prep = prepare_application_data(train_raw, params, is_train=True)
+
+bureau_agg = aggregate_bureau(pl.read_csv(DATA_DIR / "bureau.csv"))
+prev_agg   = aggregate_previous_application(pl.read_csv(DATA_DIR / "previous_application.csv"))
+inst_agg   = aggregate_installments(pl.read_csv(DATA_DIR / "installments_payments.csv"))
+
+pos_raw = pl.read_csv(DATA_DIR / "POS_CASH_balance.csv")
+cc_raw  = pl.read_csv(DATA_DIR / "credit_card_balance.csv")
+
+pos_agg = (
+    pos_raw
+    .with_columns((pl.col("SK_DPD") > 0).alias("IS_LATE"))
+    .group_by("SK_ID_CURR")
+    .agg(
+        pl.len().alias("POS_COUNT"),
+        pl.col("IS_LATE").sum().alias("POS_LATE_COUNT"),
+        pl.col("SK_DPD").max().alias("POS_MAX_DPD"),
+        pl.col("SK_DPD").mean().alias("POS_MEAN_DPD"),
+        pl.col("CNT_INSTALMENT").mean().alias("POS_MEAN_INSTALMENT"),
+    )
+    .with_columns(
+        (pl.col("POS_LATE_COUNT") / pl.col("POS_COUNT")).round(4).alias("POS_LATE_RATIO")
+    )
+)
+
+cc_agg = (
+    cc_raw
+    .with_columns(
+        (pl.col("AMT_BALANCE") / (pl.col("AMT_CREDIT_LIMIT_ACTUAL") + 1)).alias("CC_UTILIZATION")
+    )
+    .group_by("SK_ID_CURR")
+    .agg(
+        pl.len().alias("CC_COUNT"),
+        pl.col("CC_UTILIZATION").mean().alias("CC_MEAN_UTILIZATION"),
+        pl.col("CC_UTILIZATION").max().alias("CC_MAX_UTILIZATION"),
+        pl.col("AMT_DRAWINGS_CURRENT").mean().alias("CC_MEAN_DRAWINGS"),
+        pl.col("AMT_DRAWINGS_CURRENT").sum().alias("CC_TOTAL_DRAWINGS"),
+        pl.col("SK_DPD").max().alias("CC_MAX_DPD"),
+        pl.col("SK_DPD").mean().alias("CC_MEAN_DPD"),
+        (pl.col("SK_DPD") > 0).sum().alias("CC_LATE_COUNT"),
+    )
+    .with_columns(
+        (pl.col("CC_LATE_COUNT") / pl.col("CC_COUNT")).round(4).alias("CC_LATE_RATIO")
+    )
+)
+
+train_supp = (
+    join_supplementary_features(train_prep, bureau_agg, prev_agg, inst_agg)
+    .join(pos_agg, on="SK_ID_CURR", how="left")
+    .join(cc_agg,  on="SK_ID_CURR", how="left")
+)
+
+def to_pandas(df):
+    return df.with_columns(cs.boolean().cast(pl.Int8)).to_pandas()
+
+X_supp = to_pandas(train_supp.drop(TARGET_COL))
+y_supp = train_supp[TARGET_COL].to_numpy()
+```
+
+```{python}
+#| label: train-model
+#| include: false
+
+scale_pos = int((y_supp == 0).sum() / (y_supp == 1).sum())
+
+best_params = {
+    "n_estimators":      453,
+    "learning_rate":     0.0523,
+    "num_leaves":        83,
+    "max_depth":         8,
+    "min_child_samples": 43,
+    "subsample":         0.7562,
+    "colsample_bytree":  0.7814,
+    "reg_alpha":         0.3971,
+    "reg_lambda":        0.6289,
+}
+
+lgbm_final = lgb.LGBMClassifier(
+    scale_pos_weight=scale_pos,
+    n_jobs=-1,
+    random_state=RANDOM_STATE,
+    verbose=-1,
+    **best_params,
+)
+lgbm_final.fit(X_supp, y_supp)
+
+cv3 = StratifiedKFold(n_splits=3, shuffle=True, random_state=RANDOM_STATE)
+lgbm_oof = lgb.LGBMClassifier(
+    scale_pos_weight=scale_pos,
+    n_jobs=-1,
+    random_state=RANDOM_STATE,
+    verbose=-1,
+    **best_params,
+)
+oof_probs = cross_val_predict(
+    lgbm_oof, X_supp, y_supp, cv=cv3, method="predict_proba", n_jobs=-1
+)[:, 1]
+oof_auc = roc_auc_score(y_supp, oof_probs)
+```
+
+---
+
+## 1. Model Details
+
+```{python}
+#| label: model-details-table
+#| echo: false
+
+details_html = """
+<table style="width:100%;border-collapse:collapse">
+  <tbody>
+    <tr style="background:#f0f4ff"><td style="padding:8px 14px;font-weight:bold;width:35%">Model type</td>
+      <td style="padding:8px 14px">LightGBM gradient-boosted decision tree (binary classification)</td></tr>
+    <tr><td style="padding:8px 14px;font-weight:bold">Version</td>
+      <td style="padding:8px 14px">1.0 — March 2026</td></tr>
+    <tr style="background:#f0f4ff"><td style="padding:8px 14px;font-weight:bold">Training data</td>
+      <td style="padding:8px 14px">307,511 Home Credit loan applications; 160 features drawn from the application form, credit bureau history, prior Home Credit applications, installment payment records, POS/cash balances, and credit card behavior</td></tr>
+    <tr><td style="padding:8px 14px;font-weight:bold">Class balance</td>
+      <td style="padding:8px 14px">8.07% positive (default); 91.93% negative — addressed via <code>scale_pos_weight = 11</code></td></tr>
+    <tr style="background:#f0f4ff"><td style="padding:8px 14px;font-weight:bold">Target variable</td>
+      <td style="padding:8px 14px"><code>TARGET</code>: 1 = payment difficulties (default), 0 = repaid on time</td></tr>
+    <tr><td style="padding:8px 14px;font-weight:bold">Primary metric</td>
+      <td style="padding:8px 14px">AUC-ROC (robust to class imbalance)</td></tr>
+  </tbody>
+</table>
+"""
+
+HTML(details_html)
+```
+
+### Key Hyperparameters
+
+```{python}
+#| label: hyperparams-table
+#| echo: false
+
+params_html = """
+<table style="border-collapse:collapse;width:60%">
+  <thead>
+    <tr style="background:#2c7be5;color:white">
+      <th style="padding:8px 14px;text-align:left">Parameter</th>
+      <th style="padding:8px 14px;text-align:left">Value</th>
+      <th style="padding:8px 14px;text-align:left">Role</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td style="padding:7px 14px"><code>n_estimators</code></td><td style="padding:7px 14px">453</td><td style="padding:7px 14px">Number of boosting rounds</td></tr>
+    <tr style="background:#f7f9fc"><td style="padding:7px 14px"><code>learning_rate</code></td><td style="padding:7px 14px">0.0523</td><td style="padding:7px 14px">Step-size shrinkage</td></tr>
+    <tr><td style="padding:7px 14px"><code>num_leaves</code></td><td style="padding:7px 14px">83</td><td style="padding:7px 14px">Tree complexity</td></tr>
+    <tr style="background:#f7f9fc"><td style="padding:7px 14px"><code>max_depth</code></td><td style="padding:7px 14px">8</td><td style="padding:7px 14px">Maximum tree depth</td></tr>
+    <tr><td style="padding:7px 14px"><code>min_child_samples</code></td><td style="padding:7px 14px">43</td><td style="padding:7px 14px">Minimum leaf size (regularization)</td></tr>
+    <tr style="background:#f7f9fc"><td style="padding:7px 14px"><code>subsample</code></td><td style="padding:7px 14px">0.7562</td><td style="padding:7px 14px">Row sampling per tree</td></tr>
+    <tr><td style="padding:7px 14px"><code>colsample_bytree</code></td><td style="padding:7px 14px">0.7814</td><td style="padding:7px 14px">Feature sampling per tree</td></tr>
+    <tr style="background:#f7f9fc"><td style="padding:7px 14px"><code>scale_pos_weight</code></td><td style="padding:7px 14px">11</td><td style="padding:7px 14px">Class imbalance correction</td></tr>
+  </tbody>
+</table>
+"""
+HTML(params_html)
+```
+
+Hyperparameters were selected via randomized search (20 iterations, 3-fold stratified CV) on a 5,000-row subsample, then validated on the full training dataset.
+
+
+---
+
+## 2. Intended Use
+
+This model was developed to support Home Credit Group's loan origination process for applicants with limited or no traditional credit history — a population that conventional credit scoring often excludes or incorrectly penalizes.
+
+**Primary use case:** Rank applicants by predicted probability of default, enabling underwriters to make more informed approve/deny decisions and to offer differentiated loan terms to lower-risk borrowers.
+
+**Who uses this model:** Credit risk analysts, underwriting teams, and automated decision systems within Home Credit Group. Model outputs are intended to *inform* human decisions, not to replace them entirely.
+
+**What it is not designed for:**
+
+- Real-time fraud detection (this model scores creditworthiness, not identity fraud)
+- Portfolio-level stress testing or macroeconomic scenario analysis
+- Applications outside of Home Credit's target market (unbanked/underbanked consumers in emerging markets)
+- Making final credit decisions without human review, particularly for borderline cases near the decision threshold
+
+**Regulatory context:** Any applicant denied credit based on this model's output is entitled under consumer lending regulations (including ECOA and equivalent statutes) to receive specific, human-readable reasons for the adverse action. See Section 6 (Adverse Action Mapping) for a translation of model features into compliant denial reasons.
+
+---
+
+## 3. Performance Metrics
+
+```{python}
+#| label: roc-curve
+#| echo: false
+
+CHOSEN_THRESHOLD = 0.63
+preds_chosen = (oof_probs >= CHOSEN_THRESHOLD).astype(int)
+tn_c, fp_c, fn_c, tp_c = confusion_matrix(y_supp, preds_chosen).ravel()
+prec_chosen  = float(precision_score(y_supp, preds_chosen, zero_division=0))
+rec_chosen   = float(recall_score(y_supp, preds_chosen, zero_division=0))
+approval_rate_chosen = (tn_c + fn_c) / len(y_supp)
+
+fpr, tpr, _ = roc_curve(y_supp, oof_probs)
+
+fig, ax = plt.subplots(figsize=(6.5, 5))
+ax.plot(fpr, tpr, color="#2c7be5", lw=2.5,
+        label=f"LightGBM  (CV AUC = {oof_auc:.4f})")
+ax.plot([0, 1], [0, 1], "k--", lw=1.2, label="Random classifier (AUC = 0.50)")
+ax.set_xlabel("False Positive Rate", fontsize=11)
+ax.set_ylabel("True Positive Rate", fontsize=11)
+ax.set_title("ROC Curve — 3-Fold Cross-Validated (Out-of-Fold)", fontsize=12)
+ax.legend(loc="lower right", fontsize=10)
+ax.grid(alpha=0.3)
+plt.tight_layout()
+roc_b64 = fig_to_b64(fig)
+img(roc_b64, "ROC Curve", "75%")
+```
+
+The ROC curve measures the model's ability to distinguish defaulters from non-defaulters across all possible thresholds. An AUC of 0.759 means that in roughly 76% of randomly drawn (defaulter, non-defaulter) pairs, the model correctly assigns a higher risk score to the defaulter.
+
+### Summary of Key Metrics
+
+```{python}
+#| label: metrics-summary-table
+#| echo: false
+
+metrics_html = f"""
+<table style="border-collapse:collapse;width:70%">
+  <thead>
+    <tr style="background:#2c7be5;color:white">
+      <th style="padding:8px 14px;text-align:left">Metric</th>
+      <th style="padding:8px 14px;text-align:center">Value</th>
+      <th style="padding:8px 14px;text-align:left">Notes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="padding:7px 14px">AUC-ROC (3-fold CV, OOF)</td>
+      <td style="padding:7px 14px;text-align:center"><strong>{oof_auc:.4f}</strong></td>
+      <td style="padding:7px 14px">Estimated on training data; threshold-independent</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:7px 14px">AUC-ROC (Kaggle public leaderboard)</td>
+      <td style="padding:7px 14px;text-align:center"><strong>0.74718</strong></td>
+      <td style="padding:7px 14px">Held-out test set; confirms generalization</td>
+    </tr>
+    <tr>
+      <td style="padding:7px 14px">Decision threshold</td>
+      <td style="padding:7px 14px;text-align:center">{CHOSEN_THRESHOLD}</td>
+      <td style="padding:7px 14px">Chosen to maximize expected business value (see Section 4)</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:7px 14px">Precision at threshold</td>
+      <td style="padding:7px 14px;text-align:center">{prec_chosen:.3f}</td>
+      <td style="padding:7px 14px">Of applicants flagged as likely default, {prec_chosen*100:.1f}% actually default</td>
+    </tr>
+    <tr>
+      <td style="padding:7px 14px">Recall at threshold</td>
+      <td style="padding:7px 14px;text-align:center">{rec_chosen:.3f}</td>
+      <td style="padding:7px 14px">The model identifies {rec_chosen*100:.1f}% of all actual defaulters</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:7px 14px">Loan approval rate</td>
+      <td style="padding:7px 14px;text-align:center">{approval_rate_chosen*100:.1f}%</td>
+      <td style="padding:7px 14px">Share of applicants the model would approve</td>
+    </tr>
+    <tr>
+      <td style="padding:7px 14px">True positives (defaults caught)</td>
+      <td style="padding:7px 14px;text-align:center">{tp_c:,}</td>
+      <td style="padding:7px 14px">Defaults correctly identified</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:7px 14px">False negatives (missed defaults)</td>
+      <td style="padding:7px 14px;text-align:center">{fn_c:,}</td>
+      <td style="padding:7px 14px">Defaults approved; each represents a potential loss</td>
+    </tr>
+    <tr>
+      <td style="padding:7px 14px">False positives (denied good loans)</td>
+      <td style="padding:7px 14px;text-align:center">{fp_c:,}</td>
+      <td style="padding:7px 14px">Creditworthy applicants incorrectly denied</td>
+    </tr>
+  </tbody>
+</table>
+"""
+HTML(metrics_html)
+```
+
+**Interpreting precision and recall at threshold 0.63:** Precision of {prec_chosen:.2f} means that roughly one in four applicants flagged as likely defaulters is actually a defaulter — this reflects the low base rate (8%) of defaults in the population. Recall of {rec_chosen:.2f} means the model captures about 41% of all defaults before they occur, leaving the majority of defaults undetected. The selected threshold prioritizes avoiding the most costly defaults while maintaining a high approval rate, consistent with the business objective of expanding credit access to underserved borrowers.
+
+
+---
+
+## 4. Decision Threshold Analysis
+
+A binary classifier produces a probability between 0 and 1 for each applicant. The **decision threshold** converts that probability into an approve/deny decision: applicants whose predicted default probability meets or exceeds the threshold are denied; all others are approved. Choosing the right threshold is a business decision, not a statistical one — it requires translating costs and benefits into a single objective.
+
+### Cost Assumptions
+
+The following parameters are drawn from published consumer lending research and are used to estimate the expected financial impact of each threshold:
+
+```{python}
+#| label: cost-assumptions-table
+#| echo: false
+
+cost_html = f"""
+<table style="border-collapse:collapse;width:80%">
+  <thead>
+    <tr style="background:#2c7be5;color:white">
+      <th style="padding:8px 14px;text-align:left">Parameter</th>
+      <th style="padding:8px 14px;text-align:left">Value</th>
+      <th style="padding:8px 14px;text-align:left">Source / Rationale</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="padding:7px 14px">Median loan amount</td>
+      <td style="padding:7px 14px">≈ $23,300 USD</td>
+      <td style="padding:7px 14px">Computed from training data (513,531 CZK × 1/22 exchange rate)</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:7px 14px">Net interest margin</td>
+      <td style="padding:7px 14px">4%</td>
+      <td style="padding:7px 14px">Conservative mid-range estimate for consumer lending; McKinsey Global Banking Review (2020)</td>
+    </tr>
+    <tr>
+      <td style="padding:7px 14px"><strong>Profit per repaid loan</strong></td>
+      <td style="padding:7px 14px"><strong>≈ $934 USD</strong></td>
+      <td style="padding:7px 14px">Loan amount × net margin</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:7px 14px">Loss Given Default (LGD)</td>
+      <td style="padding:7px 14px">60%</td>
+      <td style="padding:7px 14px">Typical range for unsecured consumer loans; Schuermann (2004), Basel II accord estimates</td>
+    </tr>
+    <tr>
+      <td style="padding:7px 14px">Recovery rate</td>
+      <td style="padding:7px 14px">25%</td>
+      <td style="padding:7px 14px">Typical recovery on defaulted unsecured consumer loans; Moody's Consumer Finance Study (2019)</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:7px 14px"><strong>Net loss per default</strong></td>
+      <td style="padding:7px 14px"><strong>≈ $10,500 USD</strong></td>
+      <td style="padding:7px 14px">Loan amount × LGD × (1 − recovery rate)</td>
+    </tr>
+    <tr>
+      <td style="padding:7px 14px">Loss-to-profit ratio</td>
+      <td style="padding:7px 14px"><strong>11.2×</strong></td>
+      <td style="padding:7px 14px">One default erases the profit from ~11 repaid loans</td>
+    </tr>
+  </tbody>
+</table>
+<p style="font-size:0.85em;color:#666;margin-top:0.5em">
+  <em>Note: Loan amounts are denominated in local currency units (CZK). USD equivalents are approximate
+  (1 USD ≈ 22 CZK) and are used for illustration only. The 11.2× loss-to-profit ratio is the
+  economically meaningful quantity and is currency-independent.</em>
+</p>
+"""
+HTML(cost_html)
+```
+
+The 11.2× loss-to-profit ratio explains why even a moderately imbalanced dataset like this one (8% defaults) requires careful threshold selection: a model must avoid defaults far more aggressively than the raw class frequencies might suggest.
+
+### Optimal Threshold
+
+The expected net value of a threshold policy is:
+
+> **Net Value = (Approved Repayers × Profit) − (Approved Defaulters × Loss) − (Denied Repayers × Profit)**
+
+The third term captures the opportunity cost of false positives — creditworthy applicants who are turned away. This is particularly important for Home Credit's mission of serving underbanked borrowers.
+
+```{python}
+#| label: threshold-sensitivity
+#| echo: false
+
+sweep_pd = sweep.to_pandas()
+
+fig, axes = plt.subplots(1, 3, figsize=(14, 4.5))
+
+# Panel 1: Net business value
+axes[0].plot(sweep_pd["threshold"], sweep_pd["net_value_m"],
+             color="#2c7be5", lw=2.5)
+axes[0].axvline(CHOSEN_THRESHOLD, color="#e63757", ls="--", lw=2,
+                label=f"Chosen threshold: {CHOSEN_THRESHOLD}")
+axes[0].set_xlabel("Threshold", fontsize=11)
+axes[0].set_ylabel("Expected Net Value ($M)", fontsize=11)
+axes[0].set_title("Net Business Value", fontsize=12, fontweight="bold")
+axes[0].legend(fontsize=9)
+axes[0].grid(alpha=0.3)
+
+# Panel 2: Precision & Recall
+axes[1].plot(sweep_pd["threshold"], sweep_pd["precision"],
+             label="Precision", color="#e63757", lw=2.5)
+axes[1].plot(sweep_pd["threshold"], sweep_pd["recall"],
+             label="Recall", color="#00b274", lw=2.5)
+axes[1].axvline(CHOSEN_THRESHOLD, color="gray", ls="--", lw=1.5)
+axes[1].set_xlabel("Threshold", fontsize=11)
+axes[1].set_ylabel("Score", fontsize=11)
+axes[1].set_title("Precision & Recall", fontsize=12, fontweight="bold")
+axes[1].legend(fontsize=9)
+axes[1].grid(alpha=0.3)
+
+# Panel 3: Approval rate
+axes[2].plot(sweep_pd["threshold"], sweep_pd["approval_rate"] * 100,
+             color="#f6a623", lw=2.5)
+axes[2].axvline(CHOSEN_THRESHOLD, color="#e63757", ls="--", lw=2,
+                label=f"Chosen threshold: {CHOSEN_THRESHOLD}")
+axes[2].set_xlabel("Threshold", fontsize=11)
+axes[2].set_ylabel("Loan Approval Rate (%)", fontsize=11)
+axes[2].set_title("Loan Approval Rate", fontsize=12, fontweight="bold")
+axes[2].legend(fontsize=9)
+axes[2].grid(alpha=0.3)
+
+plt.suptitle("Threshold Sensitivity Analysis", fontsize=14,
+             fontweight="bold", y=1.02)
+plt.tight_layout()
+threshold_b64 = fig_to_b64(fig)
+img(threshold_b64, "Threshold Sensitivity Analysis")
+```
+
+```{python}
+#| label: threshold-results
+#| echo: false
+
+baseline_value = (y_supp == 0).sum() * PROFIT_REPAID_USD - \
+                 (y_supp == 1).sum() * LOSS_DEFAULT_USD
+val_chosen = (tn_c * PROFIT_REPAID_USD
+              - fn_c * LOSS_DEFAULT_USD
+              - fp_c * PROFIT_REPAID_USD)
+
+preds_50 = (oof_probs >= 0.50).astype(int)
+tn50, fp50, fn50, tp50 = confusion_matrix(y_supp, preds_50).ravel()
+val50 = (tn50 * PROFIT_REPAID_USD - fn50 * LOSS_DEFAULT_USD
+         - fp50 * PROFIT_REPAID_USD)
+
+result_html = f"""
+<table style="border-collapse:collapse;width:75%">
+  <thead>
+    <tr style="background:#2c7be5;color:white">
+      <th style="padding:8px 14px;text-align:left">Policy</th>
+      <th style="padding:8px 14px;text-align:center">Threshold</th>
+      <th style="padding:8px 14px;text-align:center">Approval Rate</th>
+      <th style="padding:8px 14px;text-align:center">Net Value</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="padding:7px 14px">Approve everyone (no model)</td>
+      <td style="padding:7px 14px;text-align:center">—</td>
+      <td style="padding:7px 14px;text-align:center">100.0%</td>
+      <td style="padding:7px 14px;text-align:center">${baseline_value/1e6:.1f}M</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:7px 14px">Standard threshold</td>
+      <td style="padding:7px 14px;text-align:center">0.50</td>
+      <td style="padding:7px 14px;text-align:center">{(tn50+fn50)/len(y_supp)*100:.1f}%</td>
+      <td style="padding:7px 14px;text-align:center">${val50/1e6:.1f}M</td>
+    </tr>
+    <tr style="background:#d4edda">
+      <td style="padding:7px 14px"><strong>Optimal threshold (chosen)</strong></td>
+      <td style="padding:7px 14px;text-align:center"><strong>{CHOSEN_THRESHOLD}</strong></td>
+      <td style="padding:7px 14px;text-align:center"><strong>{approval_rate_chosen*100:.1f}%</strong></td>
+      <td style="padding:7px 14px;text-align:center"><strong>${val_chosen/1e6:.1f}M</strong></td>
+    </tr>
+  </tbody>
+</table>
+"""
+HTML(result_html)
+```
+
+**The chosen threshold of {CHOSEN_THRESHOLD} maximizes expected net value at \${val_chosen/1e6:.1f}M** — an improvement of \${(val_chosen - baseline_value)/1e6:.1f}M over approving all applicants and \${(val_chosen - val50)/1e6:.1f}M over using a standard 0.5 threshold. The higher threshold (relative to 0.5) reflects th
+
+---
+
+## 5. Explainability
+
+Understanding *why* the model makes a given prediction is essential for regulatory compliance, model governance, and building trust with business stakeholders. We use **SHAP (SHapley Additive exPlanations)**, a game-theoretic framework that assigns each feature a contribution score for each prediction. SHAP values are computed on a random 1,000-row sample of the training data for speed.
+
+```{python}
+#| label: shap-bar
+#| echo: false
+
+top20_names = [f for f, _ in top_feats]
+top20_vals  = [v for _, v in top_feats]
+
+fig, ax = plt.subplots(figsize=(9, 7))
+bar_colors = ["#2c7be5"] * 20
+ax.barh(top20_names[::-1], top20_vals[::-1], color=bar_colors)
+ax.set_xlabel("Mean |SHAP Value|  (average impact on model output)", fontsize=11)
+ax.set_title("Top 20 Features by SHAP Importance\n(1,000-row sample)", fontsize=12, fontweight="bold")
+ax.grid(axis="x", alpha=0.3)
+for spine in ["top", "right"]:
+    ax.spines[spine].set_visible(False)
+plt.tight_layout()
+shap_b64 = fig_to_b64(fig)
+img(shap_b64, "SHAP Feature Importance")
+```
+
+```{python}
+#| label: shap-narrative
+#| echo: false
+
+shap_html = """
+<table style="border-collapse:collapse;width:95%">
+  <thead>
+    <tr style="background:#2c7be5;color:white">
+      <th style="padding:8px 14px;text-align:left">Rank</th>
+      <th style="padding:8px 14px;text-align:left">Feature</th>
+      <th style="padding:8px 14px;text-align:left">What it measures</th>
+      <th style="padding:8px 14px;text-align:left">Direction of risk</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="padding:7px 14px">1</td>
+      <td style="padding:7px 14px"><code>EXT_SOURCE_MEAN</code></td>
+      <td style="padding:7px 14px">Average of three external credit scores from third-party data providers</td>
+      <td style="padding:7px 14px">Lower score → higher default risk</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:7px 14px">2</td>
+      <td style="padding:7px 14px"><code>EXT_SOURCE_2x3</code></td>
+      <td style="padding:7px 14px">Interaction term: EXT_SOURCE_2 × EXT_SOURCE_3</td>
+      <td style="padding:7px 14px">Lower product → higher risk</td>
+    </tr>
+    <tr>
+      <td style="padding:7px 14px">3</td>
+      <td style="padding:7px 14px"><code>LOAN_TO_VALUE_RATIO</code></td>
+      <td style="padding:7px 14px">Loan amount relative to goods price (leverage)</td>
+      <td style="padding:7px 14px">Higher ratio → higher risk</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:7px 14px">4</td>
+      <td style="padding:7px 14px"><code>INST_LATE_RATIO</code></td>
+      <td style="padding:7px 14px">Share of past installment payments made late</td>
+      <td style="padding:7px 14px">Higher ratio → higher risk</td>
+    </tr>
+    <tr>
+      <td style="padding:7px 14px">5</td>
+      <td style="padding:7px 14px"><code>NAME_EDUCATION_TYPE</code></td>
+      <td style="padding:7px 14px">Highest level of education completed</td>
+      <td style="padding:7px 14px">Lower education → higher risk</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:7px 14px">6</td>
+      <td style="padding:7px 14px"><code>BUREAU_DEBT_CREDIT_RATIO</code></td>
+      <td style="padding:7px 14px">Total current debt relative to total credit limit across bureau loans</td>
+      <td style="padding:7px 14px">Higher ratio → higher risk</td>
+    </tr>
+    <tr>
+      <td style="padding:7px 14px">7</td>
+      <td style="padding:7px 14px"><code>CODE_GENDER</code></td>
+      <td style="padding:7px 14px">Applicant gender (Male/Female)</td>
+      <td style="padding:7px 14px">Male applicants default at higher rates (see Section 7)</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:7px 14px">8</td>
+      <td style="padding:7px 14px"><code>CREDIT_TERM_MONTHS</code></td>
+      <td style="padding:7px 14px">Loan term in months (credit amount / annuity)</td>
+      <td style="padding:7px 14px">Longer terms → higher risk</td>
+    </tr>
+    <tr>
+      <td style="padding:7px 14px">9</td>
+      <td style="padding:7px 14px"><code>EMPLOYED_YEARS</code></td>
+      <td style="padding:7px 14px">Years at current employer</td>
+      <td style="padding:7px 14px">Shorter tenure → higher risk</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:7px 14px">10</td>
+      <td style="padding:7px 14px"><code>PREV_CREDIT_REQUEST_RATIO</code></td>
+      <td style="padding:7px 14px">Prior credit requested relative to prior credit approved at Home Credit</td>
+      <td style="padding:7px 14px">Higher ratio → higher risk</td>
+    </tr>
+  </tbody>
+</table>
+"""
+HTML(shap_html)
+```
+
+The dominant predictor by a large margin is `EXT_SOURCE_MEAN` and its interaction terms. These external credit scores are provided by third-party bureaus and synthesize information not otherwise available in the application form. Their outsized importance underscores both the model's reliance on external data providers and the vulnerability of the model if those scores become unavailable or biased.
+
+---
+
+## 6. Adverse Action Mapping
+
+Under the Equal Credit Opportunity Act (ECOA) and the Fair Credit Reporting Act (FCRA), lenders must provide applicants who are denied credit with specific, understandable reasons for the denial — commonly called **adverse action notices**. The model's top SHAP features must therefore be translated from technical variable names into plain-language reasons that a loan officer or compliance team can communicate to applicants.
+
+```{python}
+#| label: adverse-action
+#| echo: false
+
+aa_html = """
+<table style="border-collapse:collapse;width:100%">
+  <thead>
+    <tr style="background:#2c7be5;color:white">
+      <th style="padding:8px 14px;text-align:left">Model Feature</th>
+      <th style="padding:8px 14px;text-align:left">Adverse Action Reason (Plain Language)</th>
+      <th style="padding:8px 14px;text-align:left">ECOA Category</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="padding:7px 14px"><code>EXT_SOURCE_MEAN</code><br><code>EXT_SOURCE_2x3</code><br><code>EXT_SOURCE_1x3</code></td>
+      <td style="padding:7px 14px">Limited or insufficient external credit history; credit scores from credit reference agencies are too low</td>
+      <td style="padding:7px 14px">Credit history / credit score</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:7px 14px"><code>INST_LATE_RATIO</code></td>
+      <td style="padding:7px 14px">Delinquent past or present credit obligations — a pattern of late installment payments on prior loans</td>
+      <td style="padding:7px 14px">Delinquency on accounts</td>
+    </tr>
+    <tr>
+      <td style="padding:7px 14px"><code>BUREAU_DEBT_CREDIT_RATIO</code></td>
+      <td style="padding:7px 14px">Proportion of revolving credit balances to revolving credit limits is too high; excessive obligations in relation to income</td>
+      <td style="padding:7px 14px">Excessive obligations / high utilization</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:7px 14px"><code>LOAN_TO_VALUE_RATIO</code></td>
+      <td style="padding:7px 14px">The amount of credit requested is too high relative to the value of the goods being purchased</td>
+      <td style="padding:7px 14px">Amount of credit requested</td>
+    </tr>
+    <tr>
+      <td style="padding:7px 14px"><code>PREV_REFUSAL_RATE</code><br><code>PREV_CREDIT_REQUEST_RATIO</code></td>
+      <td style="padding:7px 14px">Number of recent inquiries or prior credit refusals on file; prior applications for credit with this lender were declined</td>
+      <td style="padding:7px 14px">Number of recent inquiries / prior refusals</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:7px 14px"><code>CREDIT_TERM_MONTHS</code></td>
+      <td style="padding:7px 14px">Length of time accounts have been established is insufficient relative to the loan term requested</td>
+      <td style="padding:7px 14px">Length of credit history</td>
+    </tr>
+    <tr>
+      <td style="padding:7px 14px"><code>EMPLOYED_YEARS</cod
+
+---
+
+## 7. Fairness Analysis
+
+A model that performs well on average can still produce systematically different outcomes for identifiable demographic groups. This section examines approval rates and actual default rates across two protected attributes — **gender** and **education level** — at the chosen threshold of 0.63. The goal is not to eliminate all group differences (which may reflect real differences in creditworthiness) but to identify disparities that are disproportionate to underlying default rates and to flag features that may carry demographic information indirectly.
+
+### Approval Rates by Gender
+
+```{python}
+#| label: fairness-gender-chart
+#| echo: false
+
+gender_pd = gender_fair.to_pandas()
+gender_labels = {"F": "Female", "M": "Male"}
+gender_pd["label"] = gender_pd["CODE_GENDER"].map(gender_labels)
+
+fig, ax = plt.subplots(figsize=(7, 4))
+x = np.arange(2)
+w = 0.35
+bars1 = ax.bar(x - w/2,
+               gender_pd["model_approval_rate"] * 100,
+               w, label="Model Approval Rate (%)",
+               color="#2c7be5")
+bars2 = ax.bar(x + w/2,
+               gender_pd["actual_default_rate"] * 100,
+               w, label="Actual Default Rate (%)",
+               color="#e63757")
+
+for bar in bars1:
+    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.4,
+            f"{bar.get_height():.1f}%", ha="center", va="bottom", fontsize=10)
+for bar in bars2:
+    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.4,
+            f"{bar.get_height():.1f}%", ha="center", va="bottom", fontsize=10)
+
+ax.set_xticks(x)
+ax.set_xticklabels(gender_pd["label"], fontsize=12)
+ax.set_ylabel("Rate (%)", fontsize=11)
+ax.set_title("Approval & Default Rates by Gender  (threshold = 0.63)",
+             fontsize=12, fontweight="bold")
+ax.legend(fontsize=10)
+ax.grid(axis="y", alpha=0.3)
+for spine in ["top", "right"]:
+    ax.spines[spine].set_visible(False)
+plt.tight_layout()
+gender_b64 = fig_to_b64(fig)
+img(gender_b64, "Fairness by Gender", "70%")
+```
+
+```{python}
+#| label: fairness-gender-table
+#| echo: false
+
+female_approval = float(gender_fair.filter(pl.col("CODE_GENDER") == "F")["model_approval_rate"][0])
+male_approval   = float(gender_fair.filter(pl.col("CODE_GENDER") == "M")["model_approval_rate"][0])
+female_default  = float(gender_fair.filter(pl.col("CODE_GENDER") == "F")["actual_default_rate"][0])
+male_default    = float(gender_fair.filter(pl.col("CODE_GENDER") == "M")["actual_default_rate"][0])
+approval_gap    = female_approval - male_approval
+default_gap     = male_default - female_default
+
+g_html = f"""
+<table style="border-collapse:collapse;width:75%">
+  <thead>
+    <tr style="background:#2c7be5;color:white">
+      <th style="padding:8px 14px">Group</th>
+      <th style="padding:8px 14px;text-align:center">N</th>
+      <th style="padding:8px 14px;text-align:center">Actual Default Rate</th>
+      <th style="padding:8px 14px;text-align:center">Model Approval Rate</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="padding:7px 14px">Female</td>
+      <td style="padding:7px 14px;text-align:center">{int(gender_fair.filter(pl.col("CODE_GENDER")=="F")["n"][0]):,}</td>
+      <td style="padding:7px 14px;text-align:center">{female_default*100:.1f}%</td>
+      <td style="padding:7px 14px;text-align:center">{female_approval*100:.1f}%</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:7px 14px">Male</td>
+      <td style="padding:7px 14px;text-align:center">{int(gender_fair.filter(pl.col("CODE_GENDER")=="M")["n"][0]):,}</td>
+      <td style="padding:7px 14px;text-align:center">{male_default*100:.1f}%</td>
+      <td style="padding:7px 14px;text-align:center">{male_approval*100:.1f}%</td>
+    </tr>
+    <tr style="background:#fff3cd">
+      <td style="padding:7px 14px"><strong>Gap (Female − Male)</strong></td>
+      <td style="padding:7px 14px;text-align:center">—</td>
+      <td style="padding:7px 14px;text-align:center">−{default_gap*100:.1f}pp</td>
+      <td style="padding:7px 14px;text-align:center">+{approval_gap*100:.1f}pp</td>
+    </tr>
+  </tbody>
+</table>
+"""
+HTML(g_html)
+```
+
+Female applicants are approved at a **{approval_gap*100:.1f} percentage point higher rate** than male applicants. Importantly, this gap is largely *justified* by the underlying data: male applicants default at **{default_gap*100:.1f} percentage points higher rates** ({male_default*100:.1f}% vs {female_default*100:.1f}%). The approval gap is therefore consistent with credit-risk-based decision-making rather than demographic discrimination.
+
+However, `CODE_GENDER` is a direct input feature and ranks 7th in SHAP importance. Regulators in some jurisdictions prohibit explicit use of gender in credit decisions even when statistically predictive. This should be reviewed by the compliance team before deployment.
+
+### Approval Rates by Education Level
+
+```{python}
+#| label: fairness-education-chart
+#| echo: false
+
+edu_pd = edu_fair.to_pandas()
+edu_pd["short_label"] = edu_pd["NAME_EDUCATION_TYPE"].str.replace(
+    " / secondary special", "", regex=False
+).str.replace("secondary", "Secondary", regex=False)
+
+fig, ax = plt.subplots(figsize=(10, 4.5))
+x3 = np.arange(len(edu_pd))
+w  = 0.35
+bars1 = ax.bar(x3 - w/2,
+               edu_pd["model_approval_rate"] * 100,
+               w, label="Model Approval Rate (%)", color="#2c7be5")
+bars2 = ax.bar(x3 + w/2,
+               edu_pd["actual_default_rate"] * 100,
+               w, label="Actual Default Rate (%)", color="#e63757")
+
+for bar in bars1:
+    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.3,
+            f"{bar.get_height():.1f}%", ha="center", va="bottom", fontsize=9)
+for bar in bars2:
+    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.3,
+            f"{bar.get_height():.1f}%", ha="center", va="bottom", fontsize=9)
+
+ax.set_xticks(x3)
+ax.set_xticklabels(edu_pd["short_label"], rotation=15, ha="right", fontsize=10)
+ax.set_ylabel("Rate (%)", fontsize=11)
+ax.set_title("Approval & Default Rates by Education Level  (threshold = 0.63)",
+             fontsize=12, fontweight="bold")
+ax.legend(fontsize=10)
+ax.grid(axis="y", alpha=0.3)
+for spine in ["top", "right"]:
+    ax.spines[spine].set_visible(False)
+plt.tight_layout()
+edu_b64 = fig_to_b64(fig)
+img(edu_b64, "Fairness by Education", "90%")
+```
+
+```{python}
+#| label: fairness-education-table
+#| echo: false
+
+edu_html = """<table style="border-collapse:collapse;width:85%">
+  <thead>
+    <tr style="background:#2c7be5;color:white">
+      <th style="padding:8px 14px">Education Level</th>
+      <th style="padding:8px 14px;text-align:center">N</th>
+      <th style="padding:8px 14px;text-align:center">Actual Default Rate</th>
+      <th style="padding:8px 14px;text-align:center">Model Approval Rate</th>
+    </tr>
+  </thead>
+  <tbody>"""
+
+row_colors = ["", " style='background:#f7f9fc'"]
+for i, row in enumerate(edu_fair.to_dicts()):
+    edu_html += f"""
+    <tr{row_colors[i % 2]}>
+      <td style="padding:7px 14px">{row['NAME_EDUCATION_TYPE']}</td>
+      <td style="padding:7px 14px;text-align:center">{row['n']:,}</td>
+      <td style="padding:7px 14px;text-align:center">{row['actual_default_rate']*100:.1f}%</td>
+      <td style="padding:7px 14px;text-align:center">{row['model_approval_rate']*100:.1f}%</td>
+    </tr>"""
+
+edu_html += "</tbody></table>"
+HTML(edu_html)
+```
+
+```{python}
+#| label: fairness-education-narrative
+#| echo: false
+
+high_edu_approval = float(edu_fair.filter(pl.col("NAME_EDUCATION_TYPE") == "Higher education")["model_approval_rate"][0])
+low_edu_approval  = float(edu_fair.filter(pl.col("NAME_EDUCATION_TYPE") == "Lower secondary")["model_approval_rate"][0])
+high_edu_default  = float(edu_fair.filter(pl.col("NAME_EDUCATION_TYPE") == "Higher education")["actual_default_rate"][0])
+low_edu_default   = float(edu_fair.filter(pl.col("NAME_EDUCATION_TYPE") == "Lower secondary")["actual_default_rate"][0])
+edu_approval_gap  = high_edu_approval - low_edu_approval
+edu_default_gap   = low_edu_default - high_edu_default
+
+narrative = f"""
+<div style="background:#fff8e1;border-left:4px solid #f6a623;padding
+
+---
+
+## 8. Limitations and Risks
+
+No model is universally reliable. The limitations described here are not failures of the modeling process — they are inherent constraints of the data, the problem, and the deployment context that any user of this model should understand before acting on its outputs.
+
+### Data Limitations
+
+**Incomplete credit picture.** The model relies heavily on `EXT_SOURCE` scores from third-party credit bureaus. These scores are missing for a substantial portion of applicants and are imputed using training-set medians. For applicants with no credit bureau history at all — precisely the population Home Credit is trying to serve — the model is operating with its most important predictors missing or estimated. Predictions for these applicants carry higher uncertainty than average.
+
+**Supplementary table coverage gaps.** Features derived from `bureau.csv`, `installments_payments.csv`, `POS_CASH_balance.csv`, and `credit_card_balance.csv` are only available for applicants who have prior relationships with Home Credit or external lenders. First-time borrowers with no prior history will have null values for all supplementary features, and the model will rely entirely on application-form data for these applicants.
+
+**Static snapshot.** The training data represents applications from a fixed historical window. The model does not update with new data and cannot adapt to macroeconomic shifts — rising interest rates, recession, or regional economic shocks — that may alter default patterns after training.
+
+**No income verification.** `AMT_INCOME_TOTAL` is self-reported and is not independently verified in this dataset. The model treats stated income as ground truth, which may systematically disadvantage applicants who understate income and advantage those who overstate it.
+
+### Modeling Limitations
+
+**Threshold calibration uncertainty.** The optimal threshold of 0.63 was derived from cost assumptions (net interest margin, LGD, recovery rate) that are approximate and drawn from general consumer lending research rather than Home Credit's own internal financials. If the true loss-to-profit ratio is materially different, the optimal threshold will shift. A ±20% change in the assumed loss-to-profit ratio moves the optimal threshold by approximately 0.04–0.06 points.
+
+**Probability calibration.** LightGBM produces well-ranked probabilities but the absolute probability values may not be well-calibrated — that is, an applicant assigned a predicted probability of 0.20 does not necessarily have a true 20% chance of default. The model should not be used to quote default probabilities to applicants or to price individual loans without first applying Platt scaling or isotonic regression to calibrate the outputs.
+
+**Recall ceiling.** At the chosen threshold of 0.63, the model identifies approximately 41% of defaults. The remaining 59% of defaults are approved and will incur losses. This is a fundamental consequence of the low base rate (8%) and the moderate AUC — it is not correctable by threshold adjustment without drastically reducing the approval rate.
+
+**Subsample tuning.** Hyperparameters were selected via randomized search on a 5,000-row subsample rather than the full training set. While the best parameters were validated on the full dataset, the search may have missed better configurations that only emerge at full scale.
+
+### Deployment Risks
+
+**Feedback loops.** If the model is used to make approval decisions, the resulting loans generate new repayment data — but only for approved applicants. Denied applicants generate no outcome data. Over time, this creates a feedback loop where the model is only retrained on the segment of the population it already approved, potentially reinforcing existing biases and degrading performance on the margin.
+
+**Population drift.** The model was trained on a specific population of Home Credit applicants in emerging markets. If deployed to a substantially different applicant pool — different geography, time period, or product type — performance may degrade without warning. Regular monitoring of AUC on recent applications is recommended.
+
+**Regulatory risk from protected attributes.** `CODE_GENDER` is a direct input to the model and ranks 7th in SHAP importance. `NAME_EDUCATION_TYPE` ranks 5th. Both are potential proxies for protected characteristics under fair lending laws. In jurisdictions where their use is restricted, removing or constraining these features may be required, which would reduce model AUC by an estimated 0.005–0.015 based on their SHAP contributions.
+
+**Human over-reliance.** Because the model produces a single probability score, there is a risk that loan officers treat it as a definitive answer rather than one input among many. Borderline cases — applicants near the 0.63 threshold — carry the most uncertainty and benefit most from human review.
+
+
+---
+
+## 9. Executive Summary
+
+*This section is written for senior business leaders and does not assume a technical background.*
+
+---
+
+### What This Model Does
+
+Home Credit Group serves borrowers who are often invisible to traditional credit scoring — people without formal credit histories who are routinely denied loans by banks, even when they are perfectly capable of repaying. The goal of this project was to build a model that identifies which of these applicants are likely to repay, so Home Credit can extend credit to more of them with confidence.
+
+The model examines 160 pieces of information about each applicant — including their income, employment history, loan amount, and any available credit bureau data — and produces a single number between 0 and 1 representing the estimated probability that the applicant will default. Applicants whose probability exceeds the chosen threshold of **0.63** are flagged for denial; all others are approved.
+
+---
+
+### How Well Does It Work?
+
+```{python}
+#| label: exec-summary-scorecard
+#| echo: false
+
+scorecard_html = f"""
+<table style="border-collapse:collapse;width:80%">
+  <thead>
+    <tr style="background:#2c7be5;color:white">
+      <th style="padding:10px 16px;text-align:left">Metric</th>
+      <th style="padding:10px 16px;text-align:center">Value</th>
+      <th style="padding:10px 16px;text-align:left">Plain-Language Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="padding:9px 16px">AUC-ROC (independent test set)</td>
+      <td style="padding:9px 16px;text-align:center;font-weight:bold">0.747</td>
+      <td style="padding:9px 16px">In 3 out of 4 head-to-head comparisons, the model correctly identifies the higher-risk borrower</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:9px 16px">Loan approval rate</td>
+      <td style="padding:9px 16px;text-align:center;font-weight:bold">86.2%</td>
+      <td style="padding:9px 16px">The model approves the large majority of applicants, consistent with Home Credit's mission to expand access to credit</td>
+    </tr>
+    <tr>
+      <td style="padding:9px 16px">Defaults identified before approval</td>
+      <td style="padding:9px 16px;text-align:center;font-weight:bold">41%</td>
+      <td style="padding:9px 16px">The model catches roughly 2 in 5 defaults before they happen</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:9px 16px">Expected net value improvement</td>
+      <td style="padding:9px 16px;text-align:center;font-weight:bold">+$47.3M</td>
+      <td style="padding:9px 16px">Estimated gain over a no-model baseline of approving all applicants (see assumptions below)</td>
+    </tr>
+  </tbody>
+</table>
+"""
+HTML(scorecard_html)
+```
+
+---
+
+### Business Recommendation
+
+**Deploy this model as a first-pass screening tool, with human review for borderline cases.**
+
+The model should be used to rank applicants by risk, not to make fully automated approve/deny decisions. The recommended workflow is:
+
+1. **Approve automatically** applicants with predicted default probability below 0.50 — these are clearly low-risk
+2. **Deny automatically** applicants with predicted probability above 0.75 — these are clearly high-risk
+3. **Send to underwriter review** applicants in the 0.50–0.75 range — these are borderline cases where the model has meaningful uncertainty and human judgment adds the most value
+
+This tiered approach captures most of the model's financial benefit while reducing the risk of systematic errors at the margin.
+
+---
+
+### Expected Financial Impact
+
+```{python}
+#| label: exec-summary-impact
+#| echo: false
+
+impact_html = f"""
+<table style="border-collapse:collapse;width:80%">
+  <thead>
+    <tr style="background:#2c7be5;color:white">
+      <th style="padding:10px 16px;text-align:left">Scenario</th>
+      <th style="padding:10px 16px;text-align:center">Est. Net Value<br>(307K applicant pool)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="padding:9px 16px">Approve all applicants (no model)</td>
+      <td style="padding:9px 16px;text-align:center">${baseline_val/1e6:.1f}M</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:9px 16px">Standard 0.5 threshold</td>
+      <td style="padding:9px 16px;text-align:center">${val50/1e6:.1f}M</td>
+    </tr>
+    <tr style="background:#d4edda">
+      <td style="padding:9px 16px"><strong>Recommended threshold (0.63)</strong></td>
+      <td style="padding:9px 16px;text-align:center"><strong>${val_chosen/1e6:.1f}M</strong></td>
+    </tr>
+  </tbody>
+</table>
+<p style="font-size:0.85em;color:#666;margin-top:0.5em">
+  <em>Financial estimates assume: median loan ≈ $23,300 USD, net interest margin = 4%,
+  loss given default = 60%, recovery rate = 25%. These are industry benchmarks drawn from
+  McKinsey (2020) and Moody's (2019) — Home Credit's actual figures may differ. Estimates
+  are illustrative and should be validated against internal financials before budgeting.</em>
+</p>
+"""
+HTML(impact_html)
+```
+
+The most important cost fact: **one default costs approximately 11× the profit of one repaid loan** (~\$10,500 loss vs ~\$934 profit). This is why a threshold of 0.63 — higher than the intuitive 0.5 — maximizes financial value. Approving a borderline applicant who goes on to default erases the profit from eleven good loans.
+
+---
+
+### Key Caveats for Decision-Makers
+
+```{python}
+#| label: exec-summary-caveats
+#| echo: false
+
+caveats_html = """
+<table style="border-collapse:collapse;width:90%">
+  <thead>
+    <tr style="background:#6c757d;color:white">
+      <th style="padding:8px 16px;text-align:left">Caveat</th>
+      <th style="padding:8px 16px;text-align:left">What to do about it</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="padding:8px 14px"><strong>The model misses 59% of defaults.</strong> It is a filter, not a guarantee.</td>
+      <td style="padding:8px 14px">Use alongside existing underwriting checks; do not replace human judgment for large loan amounts</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:8px 14px"><strong>Financial estimates use industry benchmarks,</strong> not Home Credit's internal figures.</td>
+      <td style="padding:8px 14px">Finance team should validate cost assumptions and re-run the threshold optimization with actual LGD and margin data</td>
+    </tr>
+    <tr>
+      <td style="padding:8px 14px"><strong>Gender is a direct model input.</strong> Male applicants are approved at a lower rate.</td>
+      <td style="padding:8px 14px">Legal team should confirm whether gender-based scoring is permitted in each target jurisdiction; model can be retrained without this feature if required</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:8px 14px"><strong>Education creates a larger approval gap than default rates alone justify.</strong></td>
+      <td style="padding:8px 14px">Monitor approval rates by education level quarterly; consider fairness constraints in a future model version</td>
+    </tr>
+    <tr>
+      <td style="padding:8px 14px"><strong>The model is a static snapshot.</strong> It will degrade as economic conditions change.</td>
+      <td style="padding:8px 14px">Schedule model retraining at least annually, or immediately following a significant macroeconomic event</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:8px 14px"><strong>Denied applicants must receive plain-language reasons</strong> under consumer protection law.</td>
+      <td style="padding:8px 14px">Use the adverse action mapping in Section 6 to generate compliant denial notices; do not cite gender or education as denial reasons</td>
+    </tr>
+  </tbody>
+</table>
+"""
+HTML(caveats_html)
+```
+
