@@ -701,8 +701,20 @@ aa_html = """
       <td style="padding:7px 14px">Length of credit history</td>
     </tr>
     <tr>
-      <td style="padding:7px 14px"><code>EMPLOYED_YEARS</cod
-
+      <td style="padding:7px 14px"><code>EMPLOYED_YEARS</code></td>
+      <td style="padding:7px 14px">Length of employment is insufficient to demonstrate income stability</td>
+      <td style="padding:7px 14px">Employment history / income stability</td>
+    </tr>
+    <tr style="background:#f7f9fc">
+      <td style="padding:7px 14px"><code>ANNUITY_TO_INCOME</code></td>
+      <td style="padding:7px 14px">Debt-to-income ratio is too high; monthly loan payment is too large relative to declared income</td>
+      <td style="padding:7px 14px">Debt-to-income / excessive obligations</td>
+    </tr>
+  </tbody>
+</table>
+"""
+HTML(aa_html)
+```
 ---
 
 ## 7. Fairness Analysis
@@ -885,8 +897,17 @@ edu_approval_gap  = high_edu_approval - low_edu_approval
 edu_default_gap   = low_edu_default - high_edu_default
 
 narrative = f"""
-<div style="background:#fff8e1;border-left:4px solid #f6a623;padding
-
+<div style="background:#fff8e1;border-left:4px solid #f6a623;padding:14px 18px;border-radius:4px;margin:1em 0">
+<strong>Education Fairness Summary:</strong> Higher-education applicants are approved at
+{high_edu_approval*100:.1f}% vs {low_edu_approval*100:.1f}% for lower-secondary applicants
+(gap: {edu_approval_gap*100:.1f} pp). The actual default rate difference is {edu_default_gap*100:.1f} pp,
+meaning the approval gap partially reflects genuine risk differences. Some disparity may also
+reflect correlations between education and income captured in features like
+<code>ANNUITY_TO_INCOME</code>.
+</div>
+"""
+HTML(narrative)
+```
 ---
 
 ## 8. Limitations and Risks
