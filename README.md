@@ -1,6 +1,6 @@
 # Home Credit Default Risk
 
-**Author:** Benjamin Hogan  
+**Author:** Benjamin Hogan
 
 ---
 
@@ -12,8 +12,108 @@ The purpose of the proposed project is to prevent future inefficiencies and lost
 
 - **Problem Type:** Binary classification (imbalanced — ~8% default rate)
 - **Target Variable:** `TARGET` (1 = default, 0 = repaid on time)
+- **Primary Metric:** AUC-ROC (robust to class imbalance)
 - **Training Data:** 307,511 loan applications × 122 features
 - **Test Data:** 48,744 loan applications × 121 features
+
+---
+
+## Modeling Notebook
+
+### `modeling_notebook.qmd`
+
+A full end-to-end modeling workflow covering baselines, candidate model comparison, class imbalance handling, hyperparameter tuning, supplementary feature engineering, and Kaggle submission. Rendered outputs are generated locally from this `.qmd` source file.
+
+### Kaggle Result
+
+| Submission | Public Leaderboard AUC-ROC |
+|---|---|
+| Final LightGBM + supplementary features | **0.74718** |
+
+---
+
+## Modeling Workflow & Results
+
+### Stage 1 — Baselines
+
+Two baselines establish performance floors before any real modeling:
+
+| Model | AUC-ROC |
+|---|---|
+| Majority class classifier (always predicts 0) | 0.5000 |
+| Logistic Regression — EXT_SOURCE features only | 0.7177 |
+
+The majority class classifier achieves ~92% accuracy but 0.50 AUC — equivalent to random guessing — confirming that **accuracy is a misleading metric** for this imbalanced problem. The three external credit scores (`EXT_SOURCE_1/2/3`) alone already provide meaningful lift, consistent with EDA findings.
+
+---
+
+### Stage 2 — Candidate Model Comparison
+
+Four candidates were evaluated using 3-fold stratified CV on the full feature set:
+
+| Model | Mean AUC-ROC | Std |
+|---|---|---|
+| **LightGBM (default params)** | **0.7664** | 0.0016 |
+| Logistic Regression — full features | 0.7454 | 0.0022 |
+| Logistic Regression — engineered features only | 0.7304 | 0.0029 |
+| Random Forest | 0.7276 | 0.0013 |
+
+**LightGBM was the clear winner**, outperforming all logistic regression variants and random forest by a meaningful margin. Its ability to handle missing values natively, model non-linear interactions, and scale efficiently on tabular data made it the candidate taken forward. Notably, logistic regression on the full feature set outperformed logistic regression on engineered features only, suggesting the raw features carry signal that the derived ratios alone do not fully capture.
+
+---
+
+### Stage 3 — Class Imbalance Handling
+
+Five strategies were tested on a 10,000-row stratified subsample using LightGBM as the base model:
+
+| Strategy | Mean AUC-ROC |
+|---|---|
+| **Random undersampling** | **0.7097** |
+| SMOTE | 0.7061 |
+| No adjustment | 0.6956 |
+| Random oversampling | 0.6915 |
+| Class weights (`scale_pos_weight`) | 0.6903 |
+
+On the subsample, **random undersampling** produced the best AUC. However, because these results were measured on a small subsample (where variance is high), `scale_pos_weight` — which natively integrates into LightGBM without data manipulation — was carried forward into hyperparameter tuning on the full dataset, where it performed competitively.
+
+---
+
+### Stage 4 — Hyperparameter Tuning
+
+Randomized search (20 iterations, 3-fold CV) was run on a 5,000-row subsample to efficiently explore the parameter space. The best parameters were then used to train on the full dataset:
+
+| Feature Set | Mean AUC-ROC | Std |
+|---|---|---|
+| Tuned LightGBM — application features only | 0.7477 | 0.0026 |
+| Tuned LightGBM + supplementary features | 0.7592 | 0.0024 |
+
+---
+
+### Stage 5 — Supplementary Features
+
+Five supplementary tables were aggregated to the applicant level and joined to the main feature matrix, adding 54 new features (107 → 161 columns):
+
+| Table | Features Added | Key Signals |
+|---|---|---|
+| `bureau.csv` | 15 | Overdue counts, debt/credit ratios, active loan recency |
+| `previous_application.csv` | 12 | Approval/refusal rates, prior credit amounts |
+| `installments_payments.csv` | 12 | Late payment ratio, underpayment behavior |
+| `POS_CASH_balance.csv` | 7 | DPD counts, late payment ratio |
+| `credit_card_balance.csv` | 10 | Utilization rate, drawing behavior, CC DPD |
+
+Adding supplementary features improved CV AUC from **0.7477 → 0.7592** (+0.0115), confirming that credit history signals from external tables add meaningful predictive power beyond the application form alone.
+
+---
+
+### Final Model
+
+The final model is a **LightGBM classifier** trained on the full training dataset (307,511 rows × 160 features) with:
+
+- Tuned hyperparameters from randomized search
+- `scale_pos_weight` to handle class imbalance (~11:1 ratio)
+- All five supplementary tables joined as additional features
+
+**Kaggle Public Leaderboard AUC-ROC: 0.74718**
 
 ---
 
@@ -28,7 +128,7 @@ A comprehensive, reusable module for cleaning, transforming, and engineering fea
 Requires Python 3.10+ and Polars:
 
 ```bash
-pip install polars
+pip install polars scikit-learn lightgbm imbalanced-learn
 ```
 
 ### Quick Start
@@ -56,22 +156,13 @@ train_prepared = prepare_application_data(train, params, is_train=True)
 test_prepared  = prepare_application_data(test, params, is_train=False)
 
 # Step 3: Aggregate supplementary tables
-bureau_agg = aggregate_bureau(
-    pl.read_csv("home-credit-default-risk/bureau.csv")
-)
-prev_agg = aggregate_previous_application(
-    pl.read_csv("home-credit-default-risk/previous_application.csv")
-)
-inst_agg = aggregate_installments(
-    pl.read_csv("home-credit-default-risk/installments_payments.csv")
-)
+bureau_agg = aggregate_bureau(pl.read_csv("home-credit-default-risk/bureau.csv"))
+prev_agg   = aggregate_previous_application(pl.read_csv("home-credit-default-risk/previous_application.csv"))
+inst_agg   = aggregate_installments(pl.read_csv("home-credit-default-risk/installments_payments.csv"))
 
 # Step 4: Join supplementary features
 train_final = join_supplementary_features(train_prepared, bureau_agg, prev_agg, inst_agg)
-test_final  = join_supplementary_features(test_prepared, bureau_agg, prev_agg, inst_agg)
-
-# Result: train_final (307,511 × 146), test_final (48,744 × 145)
-# Both have identical 145 feature columns; train has additional TARGET column
+test_final  = join_supplementary_features(test_prepared,  bureau_agg, prev_agg, inst_agg)
 ```
 
 ---
@@ -80,16 +171,14 @@ test_final  = join_supplementary_features(test_prepared, bureau_agg, prev_agg, i
 
 ### Phase 1 — Cleaning (`clean_application_data`)
 
-Handles data quality issues identified during EDA:
-
 | Transformation | Description |
-|----------------|-------------|
-| DAYS_EMPLOYED sentinel | Replace 365243 (placeholder) with null; add `DAYS_EMPLOYED_ANOM` flag |
-| AGE_YEARS | Convert negative DAYS_BIRTH to positive years |
-| CODE_GENDER "XNA" | Replace with null (4 rows) |
-| OWN_CAR_AGE | Fill with 0 for non-car-owners |
+|---|---|
+| `DAYS_EMPLOYED` sentinel | Replace 365243 (placeholder) with null; add `DAYS_EMPLOYED_ANOM` flag |
+| `AGE_YEARS` | Convert negative `DAYS_BIRTH` to positive years |
+| `CODE_GENDER "XNA"` | Replace with null (4 rows) |
+| `OWN_CAR_AGE` | Fill with 0 for non-car-owners |
 | EXT_SOURCE imputation | Median imputation using **training medians only** |
-| OCCUPATION_TYPE | Fill nulls with "Unknown" |
+| `OCCUPATION_TYPE` | Fill nulls with "Unknown" |
 | Housing columns | Drop 47 columns with >50% missing |
 | Credit bureau inquiries | Fill nulls with 0 |
 
@@ -97,78 +186,7 @@ Handles data quality issues identified during EDA:
 
 ### Phase 2 — Feature Engineering (`engineer_features`)
 
-Creates 30 derived features:
-
 | Category | Features |
-|----------|----------|
+|---|---|
 | **Demographics** | `EMPLOYED_YEARS`, `REGISTRATION_YEARS`, `ID_PUBLISH_YEARS`, `PHONE_CHANGE_YEARS`, `EMPLOYED_TO_AGE_RATIO` |
-| **Financial Ratios** | `CREDIT_INCOME_RATIO`, `ANNUITY_INCOME_RATIO`, `LOAN_TO_VALUE_RATIO`, `CREDIT_TERM_MONTHS`, `GOODS_TO_INCOME_RATIO` |
-| **Missing Indicators** | 10 `MISS_*` boolean flags |
-| **EXT_SOURCE Interactions** | `EXT_SOURCE_MEAN`, 3 pairwise products, 3 squared terms |
-| **Binned Variables** | `AGE_BIN`, `CREDIT_INCOME_BIN`, `EXT_SOURCE_MEAN_BIN` |
-
-**Result:** 77 → 107 columns
-
-### Phase 3 — Supplementary Aggregations
-
-Aggregates data from supplementary tables to the applicant level (`SK_ID_CURR`):
-
-| Function | Source File | New Columns | Description |
-|----------|-------------|-------------|-------------|
-| `aggregate_bureau()` | bureau.csv | 15 | Credit counts, active/closed ratio, overdue amounts, debt ratios |
-| `aggregate_previous_application()` | previous_application.csv | 12 | Application counts, approval/refusal rates, amounts |
-| `aggregate_installments()` | installments_payments.csv | 12 | Late payment ratio, underpayment ratio, payment behavior |
-
-**Result:** 107 → 146 columns (145 features + TARGET)
-
----
-
-## Train/Test Consistency
-
-The `FittedParams` dataclass ensures no data leakage:
-
-```python
-@dataclass
-class FittedParams:
-    ext_source_medians: dict[str, float]  # Medians from training data
-    columns_to_keep: list[str]            # Column alignment
-```
-
-- **`fit_params_from_train()`** — Computes parameters from training data only
-- **`prepare_application_data()`** — Applies identical transformations to both datasets
-- **`align_train_test()`** — Ensures identical column order (excluding TARGET)
-
----
-
-## Key Functions
-
-| Function | Purpose |
-|----------|---------|
-| `fit_params_from_train(train_df)` | Compute medians and thresholds from training data |
-| `prepare_application_data(df, params, is_train)` | Full cleaning + feature engineering pipeline |
-| `clean_application_data(df, ext_source_medians)` | Phase 1 cleaning only |
-| `engineer_features(df)` | Phase 2 feature engineering only |
-| `aggregate_bureau(bureau_df)` | Aggregate bureau.csv to applicant level |
-| `aggregate_previous_application(prev_df)` | Aggregate previous_application.csv |
-| `aggregate_installments(inst_df)` | Aggregate installments_payments.csv |
-| `join_supplementary_features(app_df, ...)` | Join all aggregations to application data |
-| `align_train_test(train_df, test_df)` | Ensure identical columns (except TARGET) |
-
----
-
-## Data Files
-
-All data files are in `home-credit-default-risk/` and are **not committed to the repository** (see `.gitignore`).
-
-| File | Description |
-|------|-------------|
-| application_train.csv | Training data with TARGET |
-| application_test.csv | Test data (no TARGET) |
-| bureau.csv | Credit Bureau records |
-| previous_application.csv | Previous Home Credit applications |
-| installments_payments.csv | Payment history |
-| bureau_balance.csv | Monthly bureau balance history |
-| POS_CASH_balance.csv | POS/Cash loan balances |
-| credit_card_balance.csv | Credit card balances |
-| HomeCredit_columns_description.csv | Data dictionary |
-
+| 
