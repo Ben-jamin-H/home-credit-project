@@ -159,3 +159,4 @@ submission_*.csv
 # -------------------------------------------------------------------
 # Uncomment below to exclude all HTML; for now we include notebook HTML
 # *.html
+*.html
