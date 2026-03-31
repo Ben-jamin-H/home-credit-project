@@ -1,4 +1,4 @@
-# Home Credit Default Risk — Predictive Credit Scoring for Underserved Borrowers
+# Home Credit Default Risk: Predictive Credit Scoring for Underserved Borrowers
 
 **Author:** Benjamin Hogan
 **Tools:** Python · Polars · LightGBM · SHAP · Quarto
@@ -8,53 +8,53 @@
 
 ## Project Overview
 
-Approximately 1.7 billion adults worldwide lack access to formal financial services, often not because they are poor credit risks, but simply because they lack a credit history. Home Credit Group serves this population — but without reliable repayment signals, the company faces a difficult tradeoff: approve too liberally and absorb default losses; approve too conservatively and leave profitable borrowers on the table.
+Approximately 1.7 billion adults worldwide do not have access to formal financial services. In many cases this is not because they are poor credit risks, but because they have no credit history to evaluate. Home Credit Group serves this population, and the core challenge is figuring out which applicants are actually likely to repay when traditional credit scores are unavailable or incomplete.
 
-This project builds an end-to-end machine learning pipeline to address that tradeoff directly. Using application data, credit bureau records, and behavioral payment histories, the model identifies thin-file applicants who are likely to repay — enabling Home Credit to extend credit confidently to borrowers who would otherwise be rejected.
+Without reliable repayment signals, the company is left with a bad set of options: approve broadly and absorb default losses, or approve conservatively and turn away borrowers who would have paid. This project builds a machine learning pipeline to improve that decision.
 
-The deliverables go beyond a Kaggle score. The project includes a production-oriented data preparation module, a full model card with fairness analysis and regulatory considerations, and a business-grounded threshold analysis that translates model output into a concrete lending strategy with estimated financial impact.
+Using application data, credit bureau records, and behavioral payment histories, the model identifies thin-file applicants who are likely to repay. The goal is to give Home Credit a practical screening tool, not just a prediction score. That means the project includes a production-ready data pipeline, a business-calibrated decision threshold, a full model card with fairness analysis, and a deployment recommendation with estimated financial impact.
 
-- **Problem Type:** Binary classification (imbalanced — ~8% default rate)
+- **Problem Type:** Binary classification (imbalanced, ~8% default rate)
 - **Target Variable:** `TARGET` (1 = default, 0 = repaid on time)
-- **Primary Metric:** AUC-ROC (chosen for robustness to class imbalance)
-- **Training Data:** 307,511 loan applications × 122 features
-- **Test Data:** 48,744 loan applications × 121 features
+- **Primary Metric:** AUC-ROC (robust to class imbalance)
+- **Training Data:** 307,511 loan applications x 122 features
+- **Test Data:** 48,744 loan applications x 121 features
 
 ---
 
 ## The Solution
 
-The solution is a **LightGBM binary classifier** trained on 160 features derived from seven raw data sources. Rather than treating this as a purely predictive exercise, the project was designed end-to-end with deployment in mind — from a leakage-free data pipeline to a business-calibrated decision threshold to a compliance-ready model card.
+The final model is a **LightGBM binary classifier** trained on 160 features pulled from seven raw data sources. The project was scoped from the start with deployment in mind, which shaped every decision from how the data pipeline was built to how the threshold was selected.
 
 The pipeline works in three phases:
 
-1. **Data Preparation** — Raw application data is cleaned, missing values are handled with training-only parameters, and 45 domain-informed features are engineered from demographic, financial, and credit history signals.
-2. **Supplementary Feature Integration** — Five behavioral tables (bureau history, previous applications, installment payments, POS cash balances, and credit card activity) are aggregated and joined, adding 54 features that capture how applicants have managed past financial obligations.
-3. **Modeling & Calibration** — LightGBM is selected over logistic regression and random forest through rigorous cross-validated comparison. Class imbalance is addressed via `scale_pos_weight`. Hyperparameters are tuned via randomized search. The final model is evaluated not just by AUC, but by its expected financial impact at a business-optimized decision threshold.
+1. **Data Preparation.** Raw application data is cleaned, missing values are imputed using training-only parameters, and 45 domain-informed features are engineered from demographic, financial, and credit history signals.
+2. **Supplementary Feature Integration.** Five behavioral tables covering bureau history, previous applications, installment payments, POS cash balances, and credit card activity are aggregated and joined to the main dataset, adding 54 features that reflect how applicants have actually managed past obligations.
+3. **Modeling and Calibration.** LightGBM is selected through cross-validated comparison against logistic regression and random forest. Class imbalance is handled via `scale_pos_weight`. Hyperparameters are tuned with randomized search. The final model is evaluated by expected financial impact at an optimized decision threshold, not just by AUC.
 
-The output is not just a prediction — it is a **tiered lending recommendation** (auto-approve / human review / auto-deny) backed by SHAP-based explainability, ECOA-compliant adverse action language, and a fairness audit across gender and education groups.
+The output is a **tiered lending recommendation** (auto-approve / human review / auto-deny) backed by SHAP explainability, ECOA-compliant adverse action language, and a fairness audit across gender and education groups.
 
 ---
 
 ## Business Value
 
-The model's value is not just predictive — it is financial and operational. A poorly calibrated lending strategy costs money in two ways: lost revenue from rejected creditworthy applicants, and default losses from approved high-risk ones. This project quantifies both.
+A poorly calibrated lending strategy loses money in two directions: rejected applicants who would have repaid represent lost revenue, and approved applicants who default represent realized losses. This project quantifies both sides.
 
-Using industry cost benchmarks (McKinsey, 2020; Moody's, 2019):
+Using published cost benchmarks (McKinsey, 2020; Moody's, 2019):
 
 - **Profit per repaid loan:** ~$934
-- **Loss per default:** ~$10,500 (11.2× ratio)
-- **Optimal decision threshold:** 0.63 — the point that maximizes expected net value across the applicant pool
+- **Loss per default:** ~$10,500 (11.2x ratio)
+- **Optimal decision threshold:** 0.63
 
-At threshold 0.63, the model is estimated to generate approximately **$50.5M in net value** on the test population — a **$47.3M improvement** over the naive baseline of approving every applicant. The recommended deployment strategy is tiered:
+At threshold 0.63, the model is estimated to generate approximately **$50.5M in net value** on the test population, which is a **$47.3M improvement** over the baseline of approving every applicant. The recommended deployment strategy is tiered:
 
 | Score Band | Action | Rationale |
 |---|---|---|
 | Below 0.50 | Auto-approve | Low predicted risk; high expected profit |
-| 0.50 – 0.75 | Human review | Borderline cases; underwriter judgment adds value |
+| 0.50 to 0.75 | Human review | Borderline cases where underwriter judgment adds value |
 | Above 0.75 | Auto-deny | High predicted default risk; expected net loss |
 
-This framework gives underwriters a practical tool — not just a model — and clearly communicates where automation is appropriate and where human judgment should be preserved.
+This framework is designed to be usable by underwriters, not just data scientists. It specifies where automation is appropriate and where a person should stay in the loop.
 
 ---
 
@@ -69,7 +69,7 @@ This framework gives underwriters a practical tool — not just a model — and 
 | Approval Rate (at threshold 0.63) | 86.2% |
 | Estimated Net Value vs. approve-all baseline | **+$47.3M** |
 
-The gap between CV AUC (0.759) and Kaggle AUC (0.747) is small and consistent with normal generalization — there is no evidence of overfitting.
+The CV AUC (0.759) and Kaggle AUC (0.747) are close, which is consistent with normal generalization on held-out data. There is no indication of overfitting.
 
 ---
 
@@ -78,7 +78,7 @@ The gap between CV AUC (0.759) and Kaggle AUC (0.747) is small and consistent wi
 ```mermaid
 flowchart LR
     subgraph RAW["📂 Raw Data"]
-        A1[application_train.csv\n307K rows × 122 cols]
+        A1[application_train.csv\n307K rows x 122 cols]
         A2[bureau.csv]
         A3[previous_application.csv]
         A4[installments_payments.csv]
@@ -87,9 +87,9 @@ flowchart LR
     end
 
     subgraph PREP["⚙️ data_preparation.py"]
-        B1["Phase 1 — Cleaning\n122 → 77 columns"]
-        B2["Phase 2 — Feature Engineering\n77 → 107 columns"]
-        B3["Phase 3 — Supplementary Aggregations\n+54 columns"]
+        B1["Phase 1 - Cleaning\n122 to 77 columns"]
+        B2["Phase 2 - Feature Engineering\n77 to 107 columns"]
+        B3["Phase 3 - Supplementary Aggregations\n+54 columns"]
         B1 --> B2 --> B3
     end
 
@@ -136,60 +136,58 @@ home-credit-project/
 
 ## Modeling Workflow (`modeling_notebook.qmd`)
 
-The modeling notebook documents a deliberate, staged process — each decision is justified, not just reported. The goal was to arrive at the best-performing model through a reproducible, explainable workflow rather than trial and error.
+The modeling notebook walks through each stage in order, with the reasoning behind each decision documented alongside the results.
 
-### Stage 1 — Establishing Baselines
-
-Before any real modeling, two baselines establish the performance floor:
+### Stage 1 - Establishing Baselines
 
 | Model | AUC-ROC |
 |---|---|
 | Majority class classifier (always predicts 0) | 0.5000 |
-| Logistic Regression — EXT_SOURCE features only | 0.7177 |
+| Logistic Regression, EXT_SOURCE features only | 0.7177 |
 
-The majority class classifier achieves ~92% accuracy — but an AUC of 0.50, equivalent to random guessing. This demonstrates clearly why **accuracy alone is a misleading metric** for imbalanced classification problems like this one. Any model worth deploying must beat 0.7177, the score achievable with just three external credit bureau scores.
+The majority class classifier hits ~92% accuracy but scores 0.50 AUC, which is no better than a coin flip. This is why accuracy is not a useful metric for this problem. The logistic regression baseline sets a more honest performance floor: any model taken forward needs to beat 0.7177, the score you get from just three external credit bureau scores.
 
-### Stage 2 — Candidate Model Comparison
+### Stage 2 - Candidate Model Comparison
 
-Four model families were evaluated head-to-head using 3-fold stratified cross-validation on the full engineered feature set. Stratification preserves the ~8% default rate across all folds, ensuring the evaluation reflects real-world class distribution.
+Four models were compared using 3-fold stratified cross-validation on the full feature set. Stratification ensures the ~8% default rate is preserved in every fold.
 
 | Model | Mean AUC-ROC | Std |
 |---|---|---|
 | **LightGBM (default params)** | **0.7664** | 0.0016 |
-| Logistic Regression — full features | 0.7454 | 0.0022 |
-| Logistic Regression — engineered features only | 0.7304 | 0.0029 |
+| Logistic Regression, full features | 0.7454 | 0.0022 |
+| Logistic Regression, engineered features only | 0.7304 | 0.0029 |
 | Random Forest | 0.7276 | 0.0013 |
 
 ![Model Comparison](assets/model_comparison.png)
 
-LightGBM was the clear winner, outperforming all alternatives by a meaningful margin. Its advantages for this dataset are significant: it handles missing values natively (critical given the high missingness in EXT_SOURCE columns), captures non-linear interactions without explicit engineering, and scales efficiently to 300K+ rows. Notably, logistic regression on the full raw feature set outperformed the engineered-features-only variant — suggesting the raw features carry signal that derived ratios alone do not fully capture.
+LightGBM came out ahead by a clear margin. It handles missing values natively, picks up non-linear relationships without needing them to be explicitly engineered, and runs efficiently on a dataset this size. One interesting result: logistic regression on the full raw feature set beat logistic regression on engineered features only, which suggests the raw columns contain signal that the derived ratios alone do not cover.
 
-### Stage 3 — Class Imbalance Handling
+### Stage 3 - Class Imbalance Handling
 
-With only ~8% of loans defaulting, a naive model will learn to ignore the minority class. Five strategies were benchmarked on a 10,000-row stratified subsample using LightGBM as the base model:
+With only ~8% of loans defaulting, a model trained without any adjustment will learn to mostly ignore the minority class. Five strategies were tested on a 10,000-row stratified subsample:
 
 | Strategy | Mean AUC-ROC |
 |---|---|
 | **Random undersampling** | **0.7097** |
-| SMOTE (synthetic oversampling) | 0.7061 |
+| SMOTE | 0.7061 |
 | No adjustment | 0.6956 |
 | Random oversampling | 0.6915 |
 | Class weights (`scale_pos_weight`) | 0.6903 |
 
-Random undersampling produced the best AUC on the subsample. However, subsample results carry high variance, and `scale_pos_weight` — which integrates natively into LightGBM's objective function without modifying the training data — performed competitively and was carried forward into full-dataset tuning where it proved more stable.
+Random undersampling scored highest on the subsample, but subsample results are noisy. `scale_pos_weight` was carried into full-dataset tuning because it works natively inside LightGBM without touching the training data, and it held up better at scale.
 
-### Stage 4 — Hyperparameter Tuning
+### Stage 4 - Hyperparameter Tuning
 
-Randomized search over 20 parameter combinations with 3-fold CV was run on a 5,000-row subsample to efficiently explore the parameter space without the computational cost of full-dataset grid search. The best parameters were then applied to a final model trained on all 307,511 rows.
+Randomized search over 20 parameter combinations with 3-fold CV was run on a 5,000-row subsample to keep compute manageable. The best parameters were then used to train on the full 307,511 rows.
 
 | Feature Set | Mean AUC-ROC | Std |
 |---|---|---|
-| Tuned LightGBM — application features only | 0.7477 | 0.0026 |
+| Tuned LightGBM, application features only | 0.7477 | 0.0026 |
 | Tuned LightGBM + supplementary features | **0.7592** | 0.0024 |
 
-### Stage 5 — Supplementary Feature Engineering
+### Stage 5 - Supplementary Feature Engineering
 
-The application form alone captures a snapshot in time. Real credit risk also lives in behavioral history — how a borrower has managed past obligations. Five supplementary tables from Home Credit's records were aggregated to the applicant level and joined to the main feature matrix, adding 54 new features (107 → 161 columns total):
+Application form data only captures a point in time. Behavioral history, how an applicant has actually managed past debt, is often more predictive. Five supplementary tables were aggregated to the applicant level and joined to the main feature matrix, adding 54 features (107 to 161 columns total):
 
 | Table | Features Added | Key Signals |
 |---|---|---|
@@ -199,25 +197,25 @@ The application form alone captures a snapshot in time. Real credit risk also li
 | `POS_CASH_balance.csv` | 7 | DPD counts, late payment ratio |
 | `credit_card_balance.csv` | 10 | Utilization rate, drawing behavior, CC DPD |
 
-Adding supplementary features improved CV AUC from **0.7477 → 0.7592** (+0.0115) — confirming that behavioral payment history adds meaningful predictive signal beyond the application form alone. This is especially important for thin-file borrowers, where credit bureau scores may be missing or sparse.
+Adding these features moved CV AUC from 0.7477 to 0.7592, a gain of +0.0115. For thin-file borrowers especially, where credit bureau scores may be absent or sparse, payment behavior from other sources is some of the most useful signal available.
 
 ---
 
 ## Model Card (`model_card.qmd`)
 
-The model card is a structured, nine-section document that goes beyond performance metrics to address the full lifecycle of a deployed credit model — intended use, fairness, regulatory risk, and business recommendations. It is written as a professional deliverable: code is hidden, outputs are displayed, and the language is accessible to non-technical stakeholders including compliance officers, product managers, and executives.
+The model card is a nine-section document covering the full lifecycle of the deployed model: what it does, how it performs, where it should and should not be used, who it may affect, and what the risks are. It is written for a mixed audience, including underwriters, compliance officers, and business stakeholders, not just technical readers.
 
 | Section | Summary |
 |---|---|
-| **1. Model Details** | LightGBM gradient-boosted classifier, v1.0 (March 2026); trained on 160 features with tuned hyperparameters and `scale_pos_weight` for class imbalance |
-| **2. Intended Use** | First-pass credit screening tool for Home Credit underwriters. Designed to flag low-risk applicants for approval and high-risk applicants for review or denial — not for fraud detection, portfolio stress testing, or fully automated decisions |
+| **1. Model Details** | LightGBM gradient-boosted classifier, v1.0 (March 2026); 160 features; tuned hyperparameters with `scale_pos_weight` for class imbalance |
+| **2. Intended Use** | First-pass credit screening for Home Credit underwriters. Not intended for fraud detection, portfolio stress testing, or fully automated decisions |
 | **3. Performance Metrics** | CV AUC-ROC: 0.759 · Kaggle AUC-ROC: 0.747 · Precision: 0.241 · Recall: 0.412 · Approval rate: 86.2% at threshold 0.63 |
-| **4. Decision Threshold Analysis** | Financial cost assumptions drawn from McKinsey (2020) and Moody's (2019): ~$934 profit per repaid loan, ~$10,500 loss per default (11.2× asymmetry). Threshold of 0.63 maximizes expected net value at ~$50.5M — a **$47.3M improvement** over approving all applicants |
-| **5. Explainability** | SHAP analysis run on a 1,000-row stratified sample. See chart below. Top predictors: `EXT_SOURCE_MEAN` (composite external credit score), `EXT_SOURCE_2x3` (interaction term), `LOAN_TO_VALUE_RATIO`, `INST_LATE_RATIO` (installment payment behavior), and `NAME_EDUCATION_TYPE` |
-| **6. Adverse Action Mapping** | Top SHAP-ranked features translated into ECOA-compliant plain-language denial reasons suitable for adverse action notices (e.g., "limited external credit history", "pattern of late installment payments") |
-| **7. Fairness Analysis** | Female applicants approved at 88.4% vs. 81.9% for male — the gap aligns with a 3.1pp difference in actual default rates. The education approval gap (91.9% for higher education vs. 81.7% for lower secondary) exceeds the underlying default rate gap and is flagged for disparate impact monitoring |
-| **8. Limitations & Risks** | Missing EXT_SOURCE scores for new borrowers with no bureau history; model trained on a static snapshot (no drift monitoring); uncalibrated probabilities; feedback loop risk from deployment; regulatory exposure from gender and education as direct model inputs |
-| **9. Executive Summary** | Recommended deployment as a tiered screening tool: auto-approve below 0.50, human review 0.50–0.75, auto-deny above 0.75. Key caveats: model misses 59% of actual defaults at this threshold; financial estimates rely on industry benchmarks rather than internal figures; gender use as a direct feature requires legal review before production deployment |
+| **4. Decision Threshold Analysis** | Cost assumptions from McKinsey (2020) and Moody's (2019): ~$934 profit per repaid loan, ~$10,500 loss per default (11.2x ratio). Threshold 0.63 maximizes net value at ~$50.5M, a $47.3M improvement over approving all applicants |
+| **5. Explainability** | SHAP analysis on a 1,000-row stratified sample. See chart below. Top predictors: `EXT_SOURCE_MEAN`, `EXT_SOURCE_2x3`, `LOAN_TO_VALUE_RATIO`, `INST_LATE_RATIO`, `NAME_EDUCATION_TYPE` |
+| **6. Adverse Action Mapping** | Top SHAP features translated into ECOA-compliant plain-language denial reasons (e.g., "limited external credit history", "pattern of late installment payments") |
+| **7. Fairness Analysis** | Female applicants approved at 88.4% vs. 81.9% for male. The gap is consistent with a 3.1pp difference in actual default rates. The education approval gap (91.9% for higher education vs. 81.7% for lower secondary) is larger than the default rate gap and is flagged for disparate impact review |
+| **8. Limitations and Risks** | Missing EXT_SOURCE scores for borrowers with no bureau history; model trained on a static snapshot with no drift monitoring; uncalibrated probabilities; feedback loop risk from deployment; regulatory exposure from gender and education as direct inputs |
+| **9. Executive Summary** | Deploy as a tiered screening tool: auto-approve below 0.50, human review 0.50 to 0.75, auto-deny above 0.75. The model misses 59% of actual defaults at this threshold. Financial estimates use industry benchmarks. Gender as a direct input requires legal review before production deployment |
 
 ![SHAP Feature Importance](assets/shap_importance.png)
 
@@ -225,9 +223,7 @@ The model card is a structured, nine-section document that goes beyond performan
 
 ## Data Preparation Module (`data_preparation.py`)
 
-A production-oriented, reusable Python module for cleaning, transforming, and engineering features from the Home Credit dataset. The central design principle is **train/test consistency**: all fit parameters (imputation medians, column lists) are computed exclusively from training data and passed explicitly to the test pipeline — preventing any form of data leakage.
-
-The module is fully documented with NumPy-style docstrings and is designed to be importable into any downstream notebook or script without modification.
+A reusable Python module for cleaning, transforming, and engineering features from the Home Credit dataset. All fit parameters (imputation medians, column lists) are computed from training data only and passed explicitly to the test pipeline to prevent data leakage. The module is fully documented with NumPy-style docstrings and can be imported into any downstream notebook or script.
 
 ### Installation
 
@@ -250,23 +246,22 @@ from data_preparation import (
     join_supplementary_features,
 )
 
-# Load raw data
 train = pl.read_csv("home-credit-default-risk/application_train.csv")
 test  = pl.read_csv("home-credit-default-risk/application_test.csv")
 
-# Step 1: Fit parameters from training data ONLY
+# Fit parameters from training data only
 params = fit_params_from_train(train)
 
-# Step 2: Apply the full cleaning + engineering pipeline
+# Apply the full cleaning and engineering pipeline
 train_prepared = prepare_application_data(train, params, is_train=True)
 test_prepared  = prepare_application_data(test,  params, is_train=False)
 
-# Step 3: Aggregate supplementary behavioral tables
+# Aggregate supplementary tables
 bureau_agg = aggregate_bureau(pl.read_csv("home-credit-default-risk/bureau.csv"))
 prev_agg   = aggregate_previous_application(pl.read_csv("home-credit-default-risk/previous_application.csv"))
 inst_agg   = aggregate_installments(pl.read_csv("home-credit-default-risk/installments_payments.csv"))
 
-# Step 4: Join all features into final modeling datasets
+# Join into final modeling datasets
 train_final = join_supplementary_features(train_prepared, bureau_agg, prev_agg, inst_agg)
 test_final  = join_supplementary_features(test_prepared,  bureau_agg, prev_agg, inst_agg)
 ```
@@ -275,40 +270,34 @@ test_final  = join_supplementary_features(test_prepared,  bureau_agg, prev_agg, 
 
 ## Pipeline Stages
 
-### Phase 1 — Cleaning (`clean_application_data`)
-
-Raw Home Credit data contains a number of known data quality issues that must be resolved before modeling. Each transformation is handled explicitly and documented:
+### Phase 1 - Cleaning (`clean_application_data`)
 
 | Transformation | Description |
 |---|---|
-| `DAYS_EMPLOYED` sentinel | The value 365,243 is a known placeholder for unemployed applicants — replaced with null; a binary `DAYS_EMPLOYED_ANOM` flag is added to preserve the signal |
-| `AGE_YEARS` | `DAYS_BIRTH` is stored as a negative integer — converted to positive years |
-| `CODE_GENDER "XNA"` | Four rows with gender coded as "XNA" are replaced with null |
-| `OWN_CAR_AGE` | Null values for applicants who do not own a car are filled with 0 |
-| EXT_SOURCE imputation | `EXT_SOURCE_1` (56% missing), `EXT_SOURCE_2` (0.2%), and `EXT_SOURCE_3` (19.8%) are median-imputed using **training medians only** |
-| `OCCUPATION_TYPE` | Null values filled with "Unknown" to preserve rows while flagging missing information |
-| Housing columns | 47 columns with >50% missing data are dropped as too sparse to be reliably useful |
-| Credit bureau inquiries | Six `AMT_REQ_CREDIT_BUREAU_*` columns are filled with 0 where null (no inquiry = zero inquiries) |
+| `DAYS_EMPLOYED` sentinel | 365,243 is a known placeholder for unemployed applicants. Replaced with null; a binary `DAYS_EMPLOYED_ANOM` flag preserves the signal |
+| `AGE_YEARS` | `DAYS_BIRTH` is stored as a negative integer. Converted to positive years |
+| `CODE_GENDER "XNA"` | Four rows with gender coded as "XNA" replaced with null |
+| `OWN_CAR_AGE` | Null values for applicants without a car filled with 0 |
+| EXT_SOURCE imputation | `EXT_SOURCE_1` (56% missing), `EXT_SOURCE_2` (0.2%), `EXT_SOURCE_3` (19.8%) imputed using training medians only |
+| `OCCUPATION_TYPE` | Null values filled with "Unknown" |
+| Housing columns | 47 columns with more than 50% missing data dropped |
+| Credit bureau inquiries | Six `AMT_REQ_CREDIT_BUREAU_*` columns filled with 0 where null |
 
-**Result:** 122 raw columns reduced to 77 clean columns.
+**Result:** 122 columns reduced to 77.
 
-### Phase 2 — Feature Engineering (`engineer_features`)
-
-Domain-informed features are derived from the cleaned application data to give the model richer signals than raw columns alone provide:
+### Phase 2 - Feature Engineering (`engineer_features`)
 
 | Category | Features |
 |---|---|
-| **Demographics** | `EMPLOYED_YEARS`, `REGISTRATION_YEARS`, `ID_PUBLISH_YEARS`, `PHONE_CHANGE_YEARS`, `EMPLOYED_TO_AGE_RATIO` — temporal context and stability signals |
-| **Financial Ratios** | `CREDIT_INCOME_RATIO`, `ANNUITY_INCOME_RATIO`, `LOAN_TO_VALUE_RATIO`, `CREDIT_TERM_MONTHS`, `GOODS_TO_INCOME_RATIO` — affordability and debt burden indicators |
-| **Missing Indicators** | Binary flags for columns where missingness itself carries predictive signal (e.g., no goods price may indicate a specific loan type) |
-| **EXT_SOURCE Interactions** | `EXT_SOURCE_MEAN`, `EXT_SOURCE_1x2`, `EXT_SOURCE_1x3`, `EXT_SOURCE_2x3`, `EXT_SOURCE_1_SQ`, `EXT_SOURCE_2_SQ`, `EXT_SOURCE_3_SQ` — polynomial and cross-score interactions that capture non-linear relationships between the three strongest predictors |
-| **Binned Variables** | `AGE_BIN` (5-year brackets), `CREDIT_INCOME_BIN` (quartile), `EXT_SOURCE_MEAN_BIN` (quartile) — discretized versions for interpretability and non-linear effects |
+| **Demographics** | `EMPLOYED_YEARS`, `REGISTRATION_YEARS`, `ID_PUBLISH_YEARS`, `PHONE_CHANGE_YEARS`, `EMPLOYED_TO_AGE_RATIO` |
+| **Financial Ratios** | `CREDIT_INCOME_RATIO`, `ANNUITY_INCOME_RATIO`, `LOAN_TO_VALUE_RATIO`, `CREDIT_TERM_MONTHS`, `GOODS_TO_INCOME_RATIO` |
+| **Missing Indicators** | Binary flags for columns where missingness carries predictive signal |
+| **EXT_SOURCE Interactions** | `EXT_SOURCE_MEAN`, `EXT_SOURCE_1x2`, `EXT_SOURCE_1x3`, `EXT_SOURCE_2x3`, `EXT_SOURCE_1_SQ`, `EXT_SOURCE_2_SQ`, `EXT_SOURCE_3_SQ` |
+| **Binned Variables** | `AGE_BIN` (5-year brackets), `CREDIT_INCOME_BIN` (quartile), `EXT_SOURCE_MEAN_BIN` (quartile) |
 
-### Phase 3 — Supplementary Aggregations
+### Phase 3 - Supplementary Aggregations
 
-Each supplementary table is aggregated from long format (one row per event) to wide format (one row per applicant) and joined to the main feature matrix:
-
-| Function | Prefix | Key Engineered Features |
+| Function | Prefix | Key Features |
 |---|---|---|
 | `aggregate_bureau()` | `BUREAU_` | `BUREAU_COUNT`, `BUREAU_ACTIVE_RATIO`, `BUREAU_DEBT_CREDIT_RATIO`, `BUREAU_OVERDUE_RATIO`, `BUREAU_SUM_OVERDUE`, `BUREAU_MAX_OVERDUE`, `BUREAU_MEAN_DAYS_OVERDUE` |
 | `aggregate_previous_application()` | `PREV_` | `PREV_APP_COUNT`, `PREV_APPROVAL_RATE`, `PREV_REFUSAL_RATE`, `PREV_AMT_CREDIT_MEAN`, `PREV_CREDIT_REQUEST_RATIO`, `PREV_DAYS_DECISION_MEAN` |
@@ -318,33 +307,29 @@ Each supplementary table is aggregated from long format (one row per event) to w
 
 ## Challenges
 
-Building a production-ready credit model — rather than just a notebook that scores well on Kaggle — surfaced a number of real-world difficulties:
+**Class imbalance required more thought than expected.** With ~8% of applicants defaulting, accuracy is a misleading metric. Picking the right evaluation metric (AUC-ROC), choosing an imbalance strategy, and then calibrating a deployment threshold were three separate problems that each needed their own justification.
 
-**Class imbalance was more nuanced than expected.** With only ~8% of applicants defaulting, standard accuracy metrics are actively misleading. Selecting and justifying the right evaluation metric (AUC-ROC), choosing an appropriate imbalance strategy, and then setting a deployment threshold all required separate, deliberate decisions — none of which are obvious from the problem statement alone.
+**Preventing data leakage took active discipline.** EXT_SOURCE medians, column drop lists, and feature alignment all had to be fit on training data and applied to the test set without being refit. The `data_preparation.py` module was structured specifically to enforce this, with all parameters computed once from training data and passed explicitly downstream.
 
-**Data leakage required constant vigilance.** The training set and test set must be treated completely independently. EXT_SOURCE medians, column drop lists, and feature alignment all had to be computed from training data and applied to the test set — not refit on it. Building `data_preparation.py` as a parameterized, stateless module was the primary mechanism for enforcing this discipline.
+**Missing data was not just a cleaning problem.** `EXT_SOURCE_1` was missing for 56% of applicants, largely because many borrowers have no formal credit history at all. The missingness itself is a signal. Both the imputed value and a flag column were kept so the model could use both pieces of information.
 
-**Missing data was pervasive and semantically meaningful.** `EXT_SOURCE_1` was missing for 56% of applicants — not at random, but because many borrowers simply have no formal credit history. Imputing with the training median preserves model compatibility, but the missingness itself is a signal. Both the imputed value and an anomaly flag were retained to give the model both pieces of information.
+**The supplementary tables had significant edge cases.** Each of the five behavioral tables had a different schema, different aggregation logic, and different null patterns. For example, applicants with no bureau records at all need to be handled separately from applicants with bureau records that have null fields. Getting consistent output across both train and test sets took more work than the joins themselves.
 
-**The supplementary tables required significant schema work.** Each of the five behavioral tables had a different structure, aggregation logic, and set of edge cases (e.g., applicants with zero bureau records, installment records with no late payments). Writing robust aggregation functions that handle null edge cases cleanly — and produce consistent output across both train and test — took considerably more effort than the joins themselves.
-
-**Translating model output into business decisions is non-trivial.** An AUC score does not tell you what threshold to use, how much each decision is worth, or whether the model is fair to different demographic groups. Answering those questions required sourcing external cost benchmarks, building a threshold optimization framework, and conducting a manual fairness audit — work that goes well beyond what most ML tutorials cover.
+**Turning a model score into a business decision is its own problem.** An AUC number does not tell you what threshold to use, how much each type of error costs, or whether the model treats different groups fairly. Each of those questions required separate analysis: sourcing cost benchmarks, building a threshold optimizer, and running a manual fairness audit.
 
 ---
 
 ## Key Learnings
 
-This project produced several insights that go beyond the technical results:
+**Metric selection is a business decision.** AUC-ROC was chosen because it is robust to class imbalance and keeps discrimination ability separate from threshold selection. Using accuracy would have made every model in this project look artificially good while hiding the real tradeoffs.
 
-**Metric selection is a business decision, not just a statistical one.** AUC-ROC was chosen not because it is the most common metric, but because it is robust to class imbalance and separates discrimination ability from threshold selection. Choosing accuracy would have hidden the real performance characteristics of every model in this project.
+**Raw features are not always worse than engineered ones.** Logistic regression on the full raw feature set outperformed logistic regression on engineered features only. Feature engineering adds value when the model cannot discover the relationship on its own. LightGBM benefited more from adding supplementary behavioral data than from the hand-crafted ratios.
 
-**Raw features often outperform engineered ones — but both matter.** Logistic regression on the full raw feature set outperformed logistic regression on engineered features only. This was a useful reminder that feature engineering is not always additive — it depends on whether the model can exploit the raw signal on its own. LightGBM, which can model non-linear interactions natively, benefited most from the supplementary behavioral features rather than from hand-crafted ratios.
+**Imbalance strategies do not generalize across scales.** Random undersampling won on the 10K-row subsample. `scale_pos_weight` was more stable on the full dataset. Benchmarking on a subsample is useful for narrowing options, but the result is not always the same at full scale.
 
-**Imbalance strategies behave differently at different scales.** Random undersampling won on a 10K-row subsample, but `scale_pos_weight` was more consistent at full scale. This underscores the importance of evaluating strategies at the actual training scale — subsample benchmarks can mislead.
+**A model card surfaces problems that metrics do not.** Writing the model card required answering questions that are easy to skip over: What happens when EXT_SOURCE is missing for a new borrower? Can gender legally be used as a direct input? The process of working through those questions is what caught the education approval gap as a potential disparate impact issue.
 
-**A model card is a risk management tool, not just documentation.** Writing the model card forced explicit answers to questions that are easy to defer: What happens when EXT_SOURCE is missing for a new borrower? Is it legal to use gender as a direct input? What does the model actually recommend for a borderline applicant? The process of answering those questions revealed the education approval gap as a potential disparate impact issue — something that would not have surfaced from AUC alone.
-
-**Business value requires making cost assumptions explicit.** The $47.3M improvement estimate is only as reliable as the underlying cost assumptions. Sourcing those assumptions from published benchmarks and stating them openly is better than leaving the business case implicit — it invites scrutiny and makes the analysis auditable.
+**Cost assumptions need to be explicit.** The $47.3M estimate is only valid if the underlying cost assumptions are correct. Citing external benchmarks and stating them openly is better than leaving the business case vague. It makes the analysis easier to check and easier to update when internal figures become available.
 
 ---
 
@@ -353,15 +338,15 @@ This project produced several insights that go beyond the technical results:
 | Tool | Purpose |
 |---|---|
 | **Python 3.10+** | Core language |
-| **Polars** | High-performance data wrangling and feature engineering |
-| **LightGBM** | Gradient-boosted classifier — final model |
+| **Polars** | Data wrangling and feature engineering |
+| **LightGBM** | Gradient-boosted classifier, final model |
 | **scikit-learn** | Cross-validation, metrics, randomized search |
 | **imbalanced-learn** | SMOTE and resampling strategies |
 | **SHAP** | Model explainability and adverse action mapping |
-| **Quarto** | Reproducible reporting (`.qmd` → rendered HTML) |
+| **Quarto** | Reproducible reporting (.qmd to rendered HTML) |
 
 ---
 
 ## Data Source
 
-Data is sourced from the [Home Credit Default Risk Kaggle competition](https://www.kaggle.com/c/home-credit-default-risk). The dataset includes application records, credit bureau history, previous loan applications, and behavioral payment data across seven CSV files. Raw files are not tracked in this repository and must be downloaded separately and placed in the `home-credit-default-risk/` directory.
+Data is from the [Home Credit Default Risk Kaggle competition](https://www.kaggle.com/c/home-credit-default-risk). The dataset covers application records, credit bureau history, previous loan applications, and behavioral payment data across seven CSV files. Raw files are not tracked in this repository and must be downloaded separately and placed in the `home-credit-default-risk/` directory.
