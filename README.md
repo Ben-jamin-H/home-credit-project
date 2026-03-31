@@ -22,6 +22,20 @@ The deliverables go beyond a Kaggle score. The project includes a production-ori
 
 ---
 
+## The Solution
+
+The solution is a **LightGBM binary classifier** trained on 160 features derived from seven raw data sources. Rather than treating this as a purely predictive exercise, the project was designed end-to-end with deployment in mind — from a leakage-free data pipeline to a business-calibrated decision threshold to a compliance-ready model card.
+
+The pipeline works in three phases:
+
+1. **Data Preparation** — Raw application data is cleaned, missing values are handled with training-only parameters, and 45 domain-informed features are engineered from demographic, financial, and credit history signals.
+2. **Supplementary Feature Integration** — Five behavioral tables (bureau history, previous applications, installment payments, POS cash balances, and credit card activity) are aggregated and joined, adding 54 features that capture how applicants have managed past financial obligations.
+3. **Modeling & Calibration** — LightGBM is selected over logistic regression and random forest through rigorous cross-validated comparison. Class imbalance is addressed via `scale_pos_weight`. Hyperparameters are tuned via randomized search. The final model is evaluated not just by AUC, but by its expected financial impact at a business-optimized decision threshold.
+
+The output is not just a prediction — it is a **tiered lending recommendation** (auto-approve / human review / auto-deny) backed by SHAP-based explainability, ECOA-compliant adverse action language, and a fairness audit across gender and education groups.
+
+---
+
 ## Business Value
 
 The model's value is not just predictive — it is financial and operational. A poorly calibrated lending strategy costs money in two ways: lost revenue from rejected creditworthy applicants, and default losses from approved high-risk ones. This project quantifies both.
@@ -299,6 +313,38 @@ Each supplementary table is aggregated from long format (one row per event) to w
 | `aggregate_bureau()` | `BUREAU_` | `BUREAU_COUNT`, `BUREAU_ACTIVE_RATIO`, `BUREAU_DEBT_CREDIT_RATIO`, `BUREAU_OVERDUE_RATIO`, `BUREAU_SUM_OVERDUE`, `BUREAU_MAX_OVERDUE`, `BUREAU_MEAN_DAYS_OVERDUE` |
 | `aggregate_previous_application()` | `PREV_` | `PREV_APP_COUNT`, `PREV_APPROVAL_RATE`, `PREV_REFUSAL_RATE`, `PREV_AMT_CREDIT_MEAN`, `PREV_CREDIT_REQUEST_RATIO`, `PREV_DAYS_DECISION_MEAN` |
 | `aggregate_installments()` | `INST_` | `INST_LATE_RATIO`, `INST_UNDERPAY_RATIO`, `INST_DAYS_LATE_MEAN`, `INST_DAYS_LATE_MAX`, `INST_PAYMENT_RATIO_MEAN`, `INST_AMT_PAYMENT_SUM` |
+
+---
+
+## Challenges
+
+Building a production-ready credit model — rather than just a notebook that scores well on Kaggle — surfaced a number of real-world difficulties:
+
+**Class imbalance was more nuanced than expected.** With only ~8% of applicants defaulting, standard accuracy metrics are actively misleading. Selecting and justifying the right evaluation metric (AUC-ROC), choosing an appropriate imbalance strategy, and then setting a deployment threshold all required separate, deliberate decisions — none of which are obvious from the problem statement alone.
+
+**Data leakage required constant vigilance.** The training set and test set must be treated completely independently. EXT_SOURCE medians, column drop lists, and feature alignment all had to be computed from training data and applied to the test set — not refit on it. Building `data_preparation.py` as a parameterized, stateless module was the primary mechanism for enforcing this discipline.
+
+**Missing data was pervasive and semantically meaningful.** `EXT_SOURCE_1` was missing for 56% of applicants — not at random, but because many borrowers simply have no formal credit history. Imputing with the training median preserves model compatibility, but the missingness itself is a signal. Both the imputed value and an anomaly flag were retained to give the model both pieces of information.
+
+**The supplementary tables required significant schema work.** Each of the five behavioral tables had a different structure, aggregation logic, and set of edge cases (e.g., applicants with zero bureau records, installment records with no late payments). Writing robust aggregation functions that handle null edge cases cleanly — and produce consistent output across both train and test — took considerably more effort than the joins themselves.
+
+**Translating model output into business decisions is non-trivial.** An AUC score does not tell you what threshold to use, how much each decision is worth, or whether the model is fair to different demographic groups. Answering those questions required sourcing external cost benchmarks, building a threshold optimization framework, and conducting a manual fairness audit — work that goes well beyond what most ML tutorials cover.
+
+---
+
+## Key Learnings
+
+This project produced several insights that go beyond the technical results:
+
+**Metric selection is a business decision, not just a statistical one.** AUC-ROC was chosen not because it is the most common metric, but because it is robust to class imbalance and separates discrimination ability from threshold selection. Choosing accuracy would have hidden the real performance characteristics of every model in this project.
+
+**Raw features often outperform engineered ones — but both matter.** Logistic regression on the full raw feature set outperformed logistic regression on engineered features only. This was a useful reminder that feature engineering is not always additive — it depends on whether the model can exploit the raw signal on its own. LightGBM, which can model non-linear interactions natively, benefited most from the supplementary behavioral features rather than from hand-crafted ratios.
+
+**Imbalance strategies behave differently at different scales.** Random undersampling won on a 10K-row subsample, but `scale_pos_weight` was more consistent at full scale. This underscores the importance of evaluating strategies at the actual training scale — subsample benchmarks can mislead.
+
+**A model card is a risk management tool, not just documentation.** Writing the model card forced explicit answers to questions that are easy to defer: What happens when EXT_SOURCE is missing for a new borrower? Is it legal to use gender as a direct input? What does the model actually recommend for a borderline applicant? The process of answering those questions revealed the education approval gap as a potential disparate impact issue — something that would not have surfaced from AUC alone.
+
+**Business value requires making cost assumptions explicit.** The $47.3M improvement estimate is only as reliable as the underlying cost assumptions. Sourcing those assumptions from published benchmarks and stating them openly is better than leaving the business case implicit — it invites scrutiny and makes the analysis auditable.
 
 ---
 
